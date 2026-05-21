@@ -288,6 +288,17 @@ wss.on('connection', (ws, daemonId, instanceId) => {
   });
 });
 
+// Serve static frontend files in production if the public directory exists
+const publicPath = path.resolve(__dirname, '../public');
+if (fs.existsSync(publicPath)) {
+  app.use(express.static(publicPath));
+  // Serve SPA index.html for any other requests
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(publicPath, 'index.html'));
+  });
+}
+
 const PORT = process.env.PORT || 3000;
 httpServer.listen(PORT, () => {
   console.log(`====================================================`);

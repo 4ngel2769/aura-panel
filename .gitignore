@@ -140,3 +140,5 @@ walkthrough.md
 daemon/config.json
 daemon/data/db.json
 panel/data/db.json
+implementation_plan_cli.md
+implementation_plan2.md
