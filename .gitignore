@@ -137,3 +137,6 @@ dist
 implementation_plan.md
 task.md
 walkthrough.md
+daemon/config.json
+daemon/data/db.json
+panel/data/db.json
