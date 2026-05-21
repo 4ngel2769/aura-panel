@@ -15,6 +15,7 @@ export default function App() {
   
   const [activeInstance, setActiveInstance] = useState(null);
   const [showWizard, setShowWizard] = useState(false);
+  const [showDaemonWizard, setShowDaemonWizard] = useState(false);
 
   // Check backend user status on boot
   useEffect(() => {
@@ -69,6 +70,7 @@ export default function App() {
 
   const handleDaemonRegistered = (newDaemon) => {
     fetchDaemons();
+    setShowDaemonWizard(false);
   };
 
   if (!token || !isInitialized) {
@@ -130,6 +132,9 @@ export default function App() {
                 <option key={d.id} value={d.id}>{d.name} ({d.ip})</option>
               ))}
             </select>
+            <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={() => setShowDaemonWizard(true)}>
+              + New Node
+            </button>
           </div>
 
           <span style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>
@@ -153,7 +158,9 @@ export default function App() {
       </header>
 
       <main className="main-content">
-        {showWizard ? (
+        {showDaemonWizard ? (
+          <DaemonWizard token={token} onComplete={handleDaemonRegistered} />
+        ) : showWizard ? (
           <SetupWizard
             token={token}
             activeDaemon={activeDaemon}

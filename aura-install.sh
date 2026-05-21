@@ -28,6 +28,7 @@ NC='\e[0m' # No Color
 MODE_REPAIR=false
 MODE_REPAIR_CLI=false
 MODE_UNINSTALL=false
+MODE_DAEMON_ONLY=false
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -43,6 +44,10 @@ while [[ "$#" -gt 0 ]]; do
       MODE_UNINSTALL=true
       shift
       ;;
+    --daemon-only)
+      MODE_DAEMON_ONLY=true
+      shift
+      ;;
     -h|--help)
       echo -e "${BOLD}${CYAN}==========================================================${NC}"
       echo -e "${BOLD}    Aura Guided Linux Installer Options${NC}"
@@ -50,6 +55,7 @@ while [[ "$#" -gt 0 ]]; do
       echo -e "  ${YELLOW}--fix, --repair${NC}       Repair/refresh an existing installation with current configurations."
       echo -e "  ${YELLOW}--fix-cli, --repair-cli${NC}   Repair/refresh only the global 'aura' CLI administration helper."
       echo -e "  ${YELLOW}--uninstall${NC}           Safely remove Aura Panel, Daemon, and service configurations."
+      echo -e "  ${YELLOW}--daemon-only${NC}         Install only the Daemon component for headless remote nodes."
       echo -e "  ${YELLOW}-h, --help${NC}            Show this help information."
       echo -e "${BOLD}${CYAN}==========================================================${NC}"
       exit 0
@@ -365,11 +371,16 @@ fi
 
 # 1. Ask what to install
 if [ "$MODE_REPAIR" = false ]; then
-  echo -e "${BOLD}Select Installation Mode:${NC}"
-  echo "  1) Central Panel & Local Daemon (Full Setup) [Default]"
-  echo "  2) Central Panel Only (Controller Node)"
-  echo "  3) Daemon Only (Runner Agent Node)"
-  prompt_user "Enter choice (1-3) [Default: 1]: " "1" "INSTALL_MODE"
+  if [ "$MODE_DAEMON_ONLY" = true ]; then
+    INSTALL_MODE=3
+    echo -e "${CYAN}Daemon-only mode selected via flag.${NC}"
+  else
+    echo -e "${BOLD}Select Installation Mode:${NC}"
+    echo "  1) Central Panel & Local Daemon (Full Setup) [Default]"
+    echo "  2) Central Panel Only (Controller Node)"
+    echo "  3) Daemon Only (Runner Agent Node)"
+    prompt_user "Enter choice (1-3) [Default: 1]: " "1" "INSTALL_MODE"
+  fi
 
   # 2. Directory prompt
   prompt_user "Enter installation root directory [Default: /opt/aura]: " "/opt/aura" "AURA_ROOT"

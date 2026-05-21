@@ -193,7 +193,7 @@ app.get('/api/instances', (req, res) => {
 });
 
 app.post('/api/instances', async (req, res) => {
-  const { id, name, edition, version, ram, dockerEnabled, path: customPath, linkExisting, zipPath } = req.body;
+  const { id, name, edition, version, ram, dockerEnabled, path: customPath, linkExisting, zipPath, port: customPort } = req.body;
 
   if (!name || !edition || !version || !ram) {
     return res.status(400).json({ error: 'Missing parameters.' });
@@ -203,6 +203,13 @@ app.post('/api/instances', async (req, res) => {
   const cleanId = id || `aura_${Date.now()}`;
   const resolvedFolder = customPath || `/home/aura/servers/${cleanId}`;
 
+  // Prevent port collisions
+  const instances = db.getInstances();
+  let finalPort = customPort ? parseInt(customPort, 10) : (edition === 'bedrock' ? 19132 : 25565);
+  while (instances.some(i => i.port === finalPort)) {
+    finalPort++;
+  }
+
   const newInstance = {
     id: cleanId,
     name,
@@ -210,17 +217,11 @@ app.post('/api/instances', async (req, res) => {
     version,
     ram: parseInt(ram, 10),
     dockerEnabled: !!dockerEnabled,
-    port: edition === 'bedrock' ? 19132 : 25565,
+    port: finalPort,
     path: resolvedFolder,
     status: linkExisting ? 'stopped' : 'installing',
     createdAt: new Date().toISOString()
   };
-
-  // Prevent port collisions
-  const instances = db.getInstances();
-  while (instances.some(i => i.port === newInstance.port)) {
-    newInstance.port++;
-  }
 
   db.saveInstance(newInstance);
 

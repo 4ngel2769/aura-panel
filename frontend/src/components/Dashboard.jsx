@@ -13,6 +13,11 @@ export default function Dashboard({ token, activeDaemon, activeInstance, setActi
   const [liveStats, setLiveStats] = useState({ systemCpu: 0, systemRamUsed: 0, systemRamTotal: 1, processCpu: 0, processRam: 0 });
   const terminalEndRef = useRef(null);
   const wsRef = useRef(null);
+  const activeInstanceRef = useRef(activeInstance);
+
+  useEffect(() => {
+    activeInstanceRef.current = activeInstance;
+  }, [activeInstance]);
 
   // Load instances on the active daemon node
   const fetchInstances = () => {
@@ -24,7 +29,7 @@ export default function Dashboard({ token, activeDaemon, activeInstance, setActi
       .then(data => {
         if (Array.isArray(data)) {
           setInstances(data);
-          if (data.length > 0 && !activeInstance) {
+          if (data.length > 0 && !activeInstanceRef.current) {
             setActiveInstance(data[0]);
           }
         } else {

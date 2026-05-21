@@ -39,6 +39,7 @@ export default function SetupWizard({ token, activeDaemon, onComplete, onCancel 
   // Settings
   const [dockerEnabled, setDockerEnabled] = useState(false);
   const [optimalFlags, setOptimalFlags] = useState([]);
+  const [customPort, setCustomPort] = useState('');
 
   // Installation States
   const [isInstalling, setIsInstalling] = useState(false);
@@ -164,6 +165,7 @@ export default function SetupWizard({ token, activeDaemon, onComplete, onCancel 
           ram: ramMB,
           dockerEnabled,
           path: customPath.trim(),
+          port: customPort.trim() ? parseInt(customPort, 10) : undefined,
           linkExisting: creationMode === 'link',
           zipPath: creationMode === 'upload' ? uploadedZipPath : undefined
         })
@@ -718,6 +720,16 @@ export default function SetupWizard({ token, activeDaemon, onComplete, onCancel 
               placeholder="e.g. /home/aura/servers/survival-core"
               value={customPath}
               onChange={(e) => setCustomPath(e.target.value)}
+            />
+          </div>
+
+          <div style={styles.formItem}>
+            <label style={styles.label}>Custom Server Port (Optional)</label>
+            <input
+              type="number"
+              placeholder="e.g. 25565 (Leave blank for auto-assign)"
+              value={customPort}
+              onChange={(e) => setCustomPort(e.target.value)}
             />
           </div>
 

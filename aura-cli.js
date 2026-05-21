@@ -867,6 +867,28 @@ async function handleUpdate(component) {
   }
 }
 
+// Include span for cross-platform editing:
+const { spawnSync } = require('child_process');
+
+function handleDaemonEdit() {
+  if (!fs.existsSync(PATHS.daemonConfig)) {
+    console.error(`${C.red}Daemon config not found at ${PATHS.daemonConfig}${C.reset}`);
+    return;
+  }
+  
+  console.log(`${C.yellow}Opening editor for daemon config...${C.reset}`);
+  
+  const editor = process.env.EDITOR || 'nano';
+  try {
+    spawnSync(editor, [PATHS.daemonConfig], { stdio: 'inherit' });
+    console.log(`${C.green}Edit complete. Restarting daemon to apply changes...${C.reset}`);
+    runCmd('systemctl restart aura-daemon');
+    console.log(`${C.green}✔ Daemon restarted successfully.${C.reset}`);
+  } catch (err) {
+    console.error(`${C.red}Failed to open editor: ${err.message}${C.reset}`);
+  }
+}
+
 // ----------------------------------------------------
 // MAIN ROUTING
 // ----------------------------------------------------
@@ -917,6 +939,14 @@ async function main() {
       }
       break;
 
+    case 'daemon':
+      if (args[1] === 'edit') {
+        handleDaemonEdit();
+      } else {
+        console.error(`${C.red}Unknown subcommand "${args[1]}". Did you mean: aura daemon edit?${C.reset}`);
+      }
+      break;
+
     case 'healthchecks':
       handleHealthchecks();
       break;
@@ -946,6 +976,7 @@ ${C.bright}Usage:${C.reset}
   aura instances ls                 List all Minecraft server instances across nodes
   aura instance <id> stop           Safely stop a specific Minecraft server instance
   aura instance <id> console        Open interactive terminal console to a server instance
+  aura daemon edit                  Open nano to edit the daemon's json configuration
   aura healthchecks                 Validate local environment requirements, JRE, Docker, and ports
 
 ${C.bright}Update & Maintenance:${C.reset}

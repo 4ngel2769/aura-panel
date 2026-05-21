@@ -122,10 +122,12 @@ export const InstanceManager = {
           if (err) return logToBuffer(`[Docker Error] ${err.message}`);
           
           if (stream) {
-            container.modem.demuxStream(stream, {
-              write: (chunk) => logToBuffer(chunk.toString()),
-            }, {
-              write: (chunk) => logToBuffer(chunk.toString()),
+            stream.setEncoding('utf8');
+            stream.on('data', (chunk) => {
+              logToBuffer(chunk);
+            });
+            stream.on('end', () => {
+               this.handleTermination(id);
             });
           }
         });
