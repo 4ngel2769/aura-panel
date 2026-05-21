@@ -165,7 +165,7 @@ TEMP_REPO="/tmp/aura-panel-repo"
 # Resolve sources
 if [ -d "./panel" ] && [ -d "./daemon" ] && [ -d "./frontend" ]; then
   echo -e "${GREEN}✔ Running inside the deployment source tree. Copying files directly...${NC}"
-  SRC_DIR="."
+  SRC_DIR="$(pwd)"
 else
   echo -e "${BLUE}* Cloning codebase from GitHub repository...${NC}"
   rm -rf "$TEMP_REPO"
