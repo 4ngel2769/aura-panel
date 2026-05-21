@@ -76,11 +76,14 @@ const upload = multer({ storage });
 // ----------------------------------------------------
 
 app.get('/api/files/list', (req, res) => {
-  const { path: queryPath } = req.query;
-  if (!queryPath) return res.status(400).json({ error: 'Missing path query parameter.' });
+  const { path: queryPath, instanceId } = req.query;
+  if (!queryPath || !instanceId) return res.status(400).json({ error: 'Missing path or instanceId.' });
+
+  const inst = db.getInstance(instanceId);
+  if (!inst) return res.status(404).json({ error: 'Instance not found.' });
 
   try {
-    const list = FileManager.listDirectory(queryPath);
+    const list = FileManager.listDirectory(queryPath, inst.path);
     res.json(list);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -88,11 +91,14 @@ app.get('/api/files/list', (req, res) => {
 });
 
 app.get('/api/files/read', (req, res) => {
-  const { path: queryPath } = req.query;
-  if (!queryPath) return res.status(400).json({ error: 'Missing path query parameter.' });
+  const { path: queryPath, instanceId } = req.query;
+  if (!queryPath || !instanceId) return res.status(400).json({ error: 'Missing path or instanceId query parameter.' });
+
+  const inst = db.getInstance(instanceId);
+  if (!inst) return res.status(404).json({ error: 'Instance not found.' });
 
   try {
-    const content = FileManager.readFile(queryPath);
+    const content = FileManager.readFile(queryPath, inst.path);
     res.json({ content });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -100,13 +106,16 @@ app.get('/api/files/read', (req, res) => {
 });
 
 app.post('/api/files/write', (req, res) => {
-  const { path: queryPath, content } = req.body;
-  if (!queryPath || content === undefined) {
-    return res.status(400).json({ error: 'Missing parameters (path, content).' });
+  const { path: queryPath, content, instanceId } = req.body;
+  if (!queryPath || content === undefined || !instanceId) {
+    return res.status(400).json({ error: 'Missing parameters (path, content, instanceId).' });
   }
 
+  const inst = db.getInstance(instanceId);
+  if (!inst) return res.status(404).json({ error: 'Instance not found.' });
+
   try {
-    FileManager.writeFile(queryPath, content);
+    FileManager.writeFile(queryPath, content, inst.path);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -114,11 +123,14 @@ app.post('/api/files/write', (req, res) => {
 });
 
 app.post('/api/files/mkdir', (req, res) => {
-  const { path: queryPath } = req.body;
-  if (!queryPath) return res.status(400).json({ error: 'Missing path parameter.' });
+  const { path: queryPath, instanceId } = req.body;
+  if (!queryPath || !instanceId) return res.status(400).json({ error: 'Missing path or instanceId parameter.' });
+
+  const inst = db.getInstance(instanceId);
+  if (!inst) return res.status(404).json({ error: 'Instance not found.' });
 
   try {
-    FileManager.createDirectory(queryPath);
+    FileManager.createDirectory(queryPath, inst.path);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -126,11 +138,14 @@ app.post('/api/files/mkdir', (req, res) => {
 });
 
 app.delete('/api/files/delete', (req, res) => {
-  const { path: queryPath } = req.body;
-  if (!queryPath) return res.status(400).json({ error: 'Missing path parameter.' });
+  const { path: queryPath, instanceId } = req.body;
+  if (!queryPath || !instanceId) return res.status(400).json({ error: 'Missing path or instanceId parameter.' });
+
+  const inst = db.getInstance(instanceId);
+  if (!inst) return res.status(404).json({ error: 'Instance not found.' });
 
   try {
-    FileManager.deletePath(queryPath);
+    FileManager.deletePath(queryPath, inst.path);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -138,13 +153,16 @@ app.delete('/api/files/delete', (req, res) => {
 });
 
 app.post('/api/files/unzip', (req, res) => {
-  const { zipPath, targetDir } = req.body;
-  if (!zipPath || !targetDir) {
-    return res.status(400).json({ error: 'Missing parameters (zipPath, targetDir).' });
+  const { zipPath, targetDir, instanceId } = req.body;
+  if (!zipPath || !targetDir || !instanceId) {
+    return res.status(400).json({ error: 'Missing parameters (zipPath, targetDir, instanceId).' });
   }
 
+  const inst = db.getInstance(instanceId);
+  if (!inst) return res.status(404).json({ error: 'Instance not found.' });
+
   try {
-    FileManager.unzipArchive(zipPath, targetDir);
+    FileManager.unzipArchive(zipPath, targetDir, inst.path);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -154,10 +172,22 @@ app.post('/api/files/unzip', (req, res) => {
 app.post('/api/files/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
   
-  const { targetPath } = req.query;
+  const { targetPath, instanceId } = req.query;
+  
   if (targetPath) {
+    if (!instanceId) {
+      if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: 'Missing instanceId.' });
+    }
+  
+    const inst = db.getInstance(instanceId);
+    if (!inst) {
+      if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(404).json({ error: 'Instance not found.' });
+    }
+    
     try {
-      const dest = path.resolve(targetPath);
+      const dest = FileManager.resolveSafePath(targetPath, inst.path);
       const parent = path.dirname(dest);
       if (!fs.existsSync(parent)) {
         fs.mkdirSync(parent, { recursive: true });
@@ -232,7 +262,11 @@ app.post('/api/instances', async (req, res) => {
         if (zipPath && fs.existsSync(zipPath)) {
           // Extracted Zip path
           console.log(`Extracting uploaded server template ${zipPath} into ${resolvedFolder}...`);
-          FileManager.unzipArchive(zipPath, resolvedFolder);
+          
+          const AdmZip = (await import('adm-zip')).default;
+          const zip = new AdmZip(zipPath);
+          zip.extractAllTo(resolvedFolder, true);
+          
           // Delete temp upload file
           fs.unlinkSync(zipPath);
           

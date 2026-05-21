@@ -640,11 +640,16 @@ if [ "$INSTALL_MODE" -eq 1 ] || [ "$INSTALL_MODE" -eq 3 ]; then
   # Extract first key
   sleep 1.5
   DAEMON_KEY=$(grep -oP '"key":\s*"\K[^"]+' "$AURA_ROOT/daemon/config.json" || true)
-  if [ -z "$DAEMON_KEY" ] && [ -f "$AURA_ROOT/daemon/config.json" ]; then
-    DAEMON_KEY=$(node -e "console.log(require('$AURA_ROOT/daemon/config.json').key)" 2>/dev/null || true)
+  if [ -z "$DAEMON_KEY" ] || [ "$DAEMON_KEY" = "undefined" ]; then
+    if [ -f "$AURA_ROOT/daemon/config.json" ]; then
+      NODE_OUT=$(node -e "const k = require('$AURA_ROOT/daemon/config.json').key; if (k) console.log(k);" 2>/dev/null || true)
+      if [ -n "$NODE_OUT" ]; then
+        DAEMON_KEY="$NODE_OUT"
+      fi
+    fi
   fi
   
-  if [ -n "$DAEMON_KEY" ]; then
+  if [ -n "$DAEMON_KEY" ] && [ "$DAEMON_KEY" != "undefined" ]; then
     echo -e "  - Secure Daemon Key: ${GREEN}${DAEMON_KEY}${NC}"
   else
     echo -e "  - Secure Daemon Key: (Start daemon service to generate first key)"

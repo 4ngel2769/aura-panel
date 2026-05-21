@@ -10,7 +10,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import readline from 'readline';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
@@ -866,9 +866,6 @@ async function handleUpdate(component) {
     process.exit(1);
   }
 }
-
-// Include span for cross-platform editing:
-const { spawnSync } = require('child_process');
 
 function handleDaemonEdit() {
   if (!fs.existsSync(PATHS.daemonConfig)) {

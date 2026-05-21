@@ -6,19 +6,43 @@ export const FileManager = {
   /**
    * Safe path normalizer to ensure operations stay inside allowable limits
    */
-  resolveSafePath(targetPath) {
-    // Resolve absolute path
-    const resolved = path.resolve(targetPath);
-    // You could restrict it here (e.g., must stay within /home or /home/aura/servers)
-    // For general daemon use, let's return normalized absolute path
+  resolveSafePath(targetPath, basePath) {
+    if (!basePath) {
+      throw new Error("Security Error: No basePath provided to resolveSafePath.");
+    }
+
+    // Ensure targetPath is treated relative to basePath if it's absolute
+    let normalizedTarget = targetPath;
+    if (path.isAbsolute(normalizedTarget)) {
+       // if we want to support that it is an absolute path that is inside the base path.
+       // actually, for security, the frontend should just send a relative path (like '/' or '/server.properties')
+       // but since it currently sends absolute paths, we need to check if targetPath is ALREADY inside basePath.
+       normalizedTarget = targetPath;
+    } else {
+       // but typically we should join basePath and targetPath
+       normalizedTarget = path.join(basePath, targetPath);
+    }
+    
+    // Actually, let's make it robust:
+    // If targetPath is absolute and NOT inside basePath, that's an error.
+    // If targetPath is absolute and inside basePath, it's fine.
+    // If targetPath is relative, join to basePath.
+    
+    const resolved = path.resolve(path.isAbsolute(targetPath) ? targetPath : path.join(basePath, targetPath));
+    const resolvedBase = path.resolve(basePath);
+
+    if (!resolved.startsWith(resolvedBase)) {
+      throw new Error(`Path traversal denied. Path \${resolved} is outside \${resolvedBase}`);
+    }
+
     return resolved;
   },
 
   /**
    * Lists directory files and folders
    */
-  listDirectory(dirPath) {
-    const safePath = this.resolveSafePath(dirPath);
+  listDirectory(dirPath, basePath) {
+    const safePath = this.resolveSafePath(dirPath, basePath);
     if (!fs.existsSync(safePath)) {
       throw new Error(`Directory does not exist: ${dirPath}`);
     }
@@ -52,8 +76,8 @@ export const FileManager = {
   /**
    * Reads file contents
    */
-  readFile(filePath) {
-    const safePath = this.resolveSafePath(filePath);
+  readFile(filePath, basePath) {
+    const safePath = this.resolveSafePath(filePath, basePath);
     if (!fs.existsSync(safePath)) {
       throw new Error(`File does not exist: ${filePath}`);
     }
@@ -63,8 +87,8 @@ export const FileManager = {
   /**
    * Writes content to a file
    */
-  writeFile(filePath, content) {
-    const safePath = this.resolveSafePath(filePath);
+  writeFile(filePath, content, basePath) {
+    const safePath = this.resolveSafePath(filePath, basePath);
     const parentDir = path.dirname(safePath);
     if (!fs.existsSync(parentDir)) {
       fs.mkdirSync(parentDir, { recursive: true });
@@ -76,8 +100,8 @@ export const FileManager = {
   /**
    * Creates a directory
    */
-  createDirectory(dirPath) {
-    const safePath = this.resolveSafePath(dirPath);
+  createDirectory(dirPath, basePath) {
+    const safePath = this.resolveSafePath(dirPath, basePath);
     fs.mkdirSync(safePath, { recursive: true });
     return true;
   },
@@ -85,8 +109,8 @@ export const FileManager = {
   /**
    * Deletes a file or directory
    */
-  deletePath(targetPath) {
-    const safePath = this.resolveSafePath(targetPath);
+  deletePath(targetPath, basePath) {
+    const safePath = this.resolveSafePath(targetPath, basePath);
     if (!fs.existsSync(safePath)) return true;
 
     const stat = fs.statSync(safePath);
@@ -101,9 +125,10 @@ export const FileManager = {
   /**
    * Extracts a zip archive to a target directory
    */
-  unzipArchive(zipFilePath, targetDir) {
-    const safeZip = this.resolveSafePath(zipFilePath);
-    const safeTarget = this.resolveSafePath(targetDir);
+  unzipArchive(zipFilePath, targetDir, basePath) {
+    // We assume the zip itself is within the instance bounds. If it's a template, the upload endpoint handles placing it there.
+    const safeZip = this.resolveSafePath(zipFilePath, basePath);
+    const safeTarget = this.resolveSafePath(targetDir, basePath);
 
     if (!fs.existsSync(safeZip)) {
       throw new Error(`Zip archive does not exist: ${zipFilePath}`);
@@ -121,9 +146,9 @@ export const FileManager = {
   /**
    * Compress a directory to a zip file
    */
-  zipDirectory(dirPath, zipFilePath) {
-    const safeDir = this.resolveSafePath(dirPath);
-    const safeZip = this.resolveSafePath(zipFilePath);
+  zipDirectory(dirPath, zipFilePath, basePath) {
+    const safeDir = this.resolveSafePath(dirPath, basePath);
+    const safeZip = this.resolveSafePath(zipFilePath, basePath);
 
     if (!fs.existsSync(safeDir)) {
       throw new Error(`Directory does not exist: ${dirPath}`);

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 export default function FileBrowser({ token, activeDaemon, instance }) {
-  const [currentPath, setCurrentPath] = useState(instance?.path || '');
+  const [currentPath, setCurrentPath] = useState('/');
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -20,11 +20,12 @@ export default function FileBrowser({ token, activeDaemon, instance }) {
 
   // Load items whenever path or daemon changes
   const fetchDirectory = (dirPath) => {
-    if (!activeDaemon || !dirPath) return;
+    if (!activeDaemon || !dirPath || !instance?.id) return;
     setLoading(true);
     setError('');
     
-    const url = `/api/proxy/daemons/${activeDaemon.id}/files/list?path=${encodeURIComponent(dirPath)}`;
+    // Pass instanceId to ensure we are scoped to the correct directory
+    const url = `/api/proxy/daemons/\${activeDaemon.id}/files/list?path=\${encodeURIComponent(dirPath)}&instanceId=\${instance.id}`;
     
     fetch(url, {
       headers: { 'Authorization': `Bearer ${token}` }
@@ -48,9 +49,9 @@ export default function FileBrowser({ token, activeDaemon, instance }) {
   };
 
   useEffect(() => {
-    if (instance?.path) {
-      setCurrentPath(instance.path);
-      fetchDirectory(instance.path);
+    if (instance?.id) {
+      setCurrentPath('/');
+      fetchDirectory('/');
     }
   }, [instance, activeDaemon]);
 
@@ -101,7 +102,7 @@ export default function FileBrowser({ token, activeDaemon, instance }) {
       : `${currentPath}${separator}${fileItem.name}`;
 
     setLoading(true);
-    fetch(`/api/proxy/daemons/${activeDaemon.id}/files/read?path=${encodeURIComponent(filePath)}`, {
+    fetch(`/api/proxy/daemons/\${activeDaemon.id}/files/read?path=\${encodeURIComponent(filePath)}&instanceId=\${instance.id}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
       .then(res => res.json())
@@ -132,7 +133,8 @@ export default function FileBrowser({ token, activeDaemon, instance }) {
       },
       body: JSON.stringify({
         path: editingFile.path,
-        content: editingFile.content
+        content: editingFile.content,
+        instanceId: instance.id
       })
     })
       .then(res => res.json())
@@ -163,7 +165,7 @@ export default function FileBrowser({ token, activeDaemon, instance }) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ path: newDirPath })
+      body: JSON.stringify({ path: newDirPath, instanceId: instance.id })
     })
       .then(res => res.json())
       .then(data => {
@@ -193,7 +195,7 @@ export default function FileBrowser({ token, activeDaemon, instance }) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ path: newFilePath, content: '' })
+      body: JSON.stringify({ path: newFilePath, content: '', instanceId: instance.id })
     })
       .then(res => res.json())
       .then(data => {
@@ -223,7 +225,7 @@ export default function FileBrowser({ token, activeDaemon, instance }) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ path: itemPath })
+      body: JSON.stringify({ path: itemPath, instanceId: instance.id })
     })
       .then(res => res.json())
       .then(data => {
@@ -252,7 +254,8 @@ export default function FileBrowser({ token, activeDaemon, instance }) {
       },
       body: JSON.stringify({
         zipPath,
-        targetDir: currentPath
+        targetDir: currentPath,
+        instanceId: instance.id
       })
     })
       .then(res => res.json())
@@ -287,7 +290,7 @@ export default function FileBrowser({ token, activeDaemon, instance }) {
     setUploadProgress(0);
     
     const xhr = new XMLHttpRequest();
-    const url = `/api/proxy/daemons/${activeDaemon.id}/files/upload?targetPath=${encodeURIComponent(targetPath)}`;
+    const url = `/api/proxy/daemons/\${activeDaemon.id}/files/upload?targetPath=\${encodeURIComponent(targetPath)}&instanceId=\${instance.id}`;
     
     xhr.open('POST', url, true);
     xhr.setRequestHeader('Authorization', `Bearer ${token}`);
@@ -385,7 +388,7 @@ export default function FileBrowser({ token, activeDaemon, instance }) {
       {/* File Browser Toolbar */}
       <div style={styles.toolbar}>
         <div style={styles.navigationControls}>
-          <button className="btn btn-secondary" style={{ padding: '8px 12px' }} onClick={handleBackClick} disabled={currentPath === instance?.path}>
+          <button className="btn btn-secondary" style={{ padding: '8px 12px' }} onClick={handleBackClick} disabled={currentPath === '/' || currentPath === '\\' || currentPath === ''}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <line x1="19" y1="12" x2="5" y2="12"></line>
               <polyline points="12 19 5 12 12 5"></polyline>
