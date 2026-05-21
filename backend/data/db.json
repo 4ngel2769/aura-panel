@@ -1,0 +1,14 @@
+{
+  "users": [
+    {
+      "username": "aaaaaa",
+      "password": "$2a$10$n.ksAkdEjESD2ZetZqYwPeWtuSQg4JjtSknQPg1ujhPJwi991UVlC",
+      "role": "admin",
+      "createdAt": "2026-05-21T10:21:35.904Z"
+    }
+  ],
+  "instances": [],
+  "settings": {
+    "initialized": false
+  }
+}
