@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 const ENGINES = [
   { id: 'paper', name: 'PaperMC', desc: 'Highly optimized Java server software. The standard choice for multiplayer servers.', category: 'java' },
@@ -12,21 +12,31 @@ const ENGINES = [
   { id: 'glowstone', name: 'Glowstone', desc: 'Lightweight, independent Java server written from scratch. Doesn\'t require Mojang binaries.', category: 'java' }
 ];
 
-export default function SetupWizard({ token, onComplete, onCancel }) {
+export default function SetupWizard({ token, activeDaemon, onComplete, onCancel }) {
   const [step, setStep] = useState(1);
+  const [creationMode, setCreationMode] = useState('download'); // 'download', 'link', 'upload'
   const [selectedEngine, setSelectedEngine] = useState(ENGINES[0]);
   const [versions, setVersions] = useState([]);
   const [filteredVersions, setFilteredVersions] = useState([]);
   const [selectedVersion, setSelectedVersion] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   
+  // Host path details
+  const [customPath, setCustomPath] = useState('');
+  const [instanceName, setInstanceName] = useState('');
+  
+  // ZIP upload states
+  const [zipUploadProgress, setZipUploadProgress] = useState(null);
+  const [uploadedZipPath, setUploadedZipPath] = useState('');
+  const [uploadedZipName, setUploadedZipName] = useState('');
+  const zipInputRef = useRef(null);
+
   // Hardware allocations
   const [systemRam, setSystemRam] = useState(16384); // fallback 16GB total
   const [ramValue, setRamValue] = useState(4096); // default 4GB
   const [ramUnit, setRamUnit] = useState('GB'); // 'GB' or 'MB'
 
   // Settings
-  const [instanceName, setInstanceName] = useState('');
   const [dockerEnabled, setDockerEnabled] = useState(false);
   const [optimalFlags, setOptimalFlags] = useState([]);
 
@@ -35,27 +45,34 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
   const [createdInstanceId, setCreatedInstanceId] = useState('');
   const [downloadProgress, setDownloadProgress] = useState(null);
 
-  // Fetch system RAM to set appropriate limits
+  // Sync Default Paths & Names
   useEffect(() => {
-    fetch('/api/system/stats', {
+    const defaultName = `mc-${selectedEngine?.id || 'server'}-${selectedVersion || 'latest'}`;
+    setInstanceName(defaultName);
+    setCustomPath(`/home/aura/servers/${defaultName}`);
+  }, [selectedEngine, selectedVersion, creationMode]);
+
+  // Fetch active daemon stats to verify RAM limits
+  useEffect(() => {
+    if (!activeDaemon) return;
+    fetch(`/api/proxy/daemons/${activeDaemon.id}/system/stats`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
       .then(res => res.json())
       .then(data => {
         if (data.totalMemory) {
-          // Convert from bytes to MB
           setSystemRam(Math.round(data.totalMemory / (1024 * 1024)));
         }
       })
       .catch(err => console.error('Failed to load system RAM:', err));
-  }, [token]);
+  }, [activeDaemon, token]);
 
-  // Fetch versions when engine changes
+  // Fetch engine versions dynamically
   useEffect(() => {
-    if (step === 2) {
+    if (step === 3 && creationMode === 'download' && activeDaemon) {
       setVersions([]);
       setSelectedVersion('');
-      fetch(`/api/versions/${selectedEngine.id}`, {
+      fetch(`/api/proxy/daemons/${activeDaemon.id}/versions/${selectedEngine.id}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
         .then(res => res.json())
@@ -68,7 +85,7 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
         })
         .catch(err => console.error('Failed to fetch versions:', err));
     }
-  }, [selectedEngine, step, token]);
+  }, [selectedEngine, step, creationMode, activeDaemon, token]);
 
   // Handle version filter search
   useEffect(() => {
@@ -81,19 +98,11 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
     }
   }, [searchQuery, versions]);
 
-  // Keep instanceName synced
-  useEffect(() => {
-    if (selectedEngine && selectedVersion) {
-      setInstanceName(`mc-${selectedEngine.id}-${selectedVersion}`);
-    }
-  }, [selectedEngine, selectedVersion]);
-
   // Sync optimal flags preview
   useEffect(() => {
-    // Generate JVM flag mock display
-    const ramMB = ramUnit === 'GB' ? ramValue * 1024 : ramValue;
     const sizeString = ramUnit === 'GB' ? `${ramValue}G` : `${ramValue}M`;
     const flags = [`-Xms${sizeString}`, `-Xmx${sizeString}`, '-XX:+UseG1GC', '-XX:+ParallelRefProcEnabled'];
+    const ramMB = ramUnit === 'GB' ? ramValue * 1024 : ramValue;
     if (['paper', 'purpur', 'spigot'].includes(selectedEngine.id) && ramMB >= 2048) {
       flags.push('-XX:MaxGCPauseMillis=200', '-XX:+UnlockExperimentalVMOptions', '-XX:+DisableExplicitGC');
     }
@@ -103,9 +112,9 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
   // Long-polling download tracker
   useEffect(() => {
     let timer;
-    if (isInstalling && createdInstanceId) {
+    if (isInstalling && createdInstanceId && activeDaemon && creationMode === 'download') {
       const checkProgress = () => {
-        fetch(`/api/instances/${createdInstanceId}/download-status`, {
+        fetch(`/api/proxy/daemons/${activeDaemon.id}/instances/${createdInstanceId}/download-status`, {
           headers: { 'Authorization': `Bearer ${token}` }
         })
           .then(res => res.json())
@@ -113,7 +122,6 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
             setDownloadProgress(data);
             if (data.status === 'completed') {
               setIsInstalling(false);
-              // Complete Setup
               setTimeout(() => {
                 onComplete({ id: createdInstanceId });
               }, 1500);
@@ -134,35 +142,119 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
     }
 
     return () => clearTimeout(timer);
-  }, [isInstalling, createdInstanceId, token]);
+  }, [isInstalling, createdInstanceId, activeDaemon, creationMode, token]);
 
   const handleBuild = async () => {
+    if (!instanceName.trim()) return alert('Please enter an instance name.');
+    
     setIsInstalling(true);
     const ramMB = ramUnit === 'GB' ? ramValue * 1024 : ramValue;
 
     try {
-      const res = await fetch('/api/instances', {
+      const res = await fetch(`/api/proxy/daemons/${activeDaemon.id}/instances`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          name: instanceName,
+          name: instanceName.trim(),
           edition: selectedEngine.id,
-          version: selectedVersion,
+          version: selectedVersion || '1.20',
           ram: ramMB,
-          dockerEnabled
+          dockerEnabled,
+          path: customPath.trim(),
+          linkExisting: creationMode === 'link',
+          zipPath: creationMode === 'upload' ? uploadedZipPath : undefined
         })
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to trigger installation.');
+      if (!res.ok) throw new Error(data.error || 'Failed to trigger build/registration.');
 
-      setCreatedInstanceId(data.instance.id);
+      if (creationMode === 'link' || creationMode === 'upload') {
+        // Linked nodes or extracts complete almost instantly, no long polling required!
+        setIsInstalling(false);
+        alert('Server instance created successfully!');
+        onComplete({ id: data.instance.id });
+      } else {
+        setCreatedInstanceId(data.instance.id);
+      }
     } catch (e) {
       alert(e.message);
       setIsInstalling(false);
+    }
+  };
+
+  // ZIP File upload flow
+  const triggerZipUpload = () => {
+    zipInputRef.current?.click();
+  };
+
+  const handleZipFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.name.endsWith('.zip')) {
+      alert('Only .zip archives are allowed for server uploads.');
+      return;
+    }
+
+    setZipUploadProgress(0);
+    setUploadedZipPath('');
+    setUploadedZipName(file.name);
+
+    const xhr = new XMLHttpRequest();
+    const url = `/api/proxy/daemons/${activeDaemon.id}/files/upload`;
+    
+    xhr.open('POST', url, true);
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const percent = Math.round((event.loaded / event.total) * 100);
+        setZipUploadProgress(percent);
+      }
+    };
+
+    xhr.onload = () => {
+      setZipUploadProgress(null);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const resp = JSON.parse(xhr.responseText);
+          setUploadedZipPath(resp.filePath);
+        } catch (err) {
+          alert('Upload completed but daemon response could not be parsed.');
+        }
+      } else {
+        let errMessage = 'File upload failed.';
+        try {
+          const resp = JSON.parse(xhr.responseText);
+          errMessage = resp.error || errMessage;
+        } catch (e) {}
+        alert(errMessage);
+        setUploadedZipName('');
+      }
+    };
+
+    xhr.onerror = () => {
+      setZipUploadProgress(null);
+      alert('Network error occurred during ZIP package upload.');
+      setUploadedZipName('');
+    };
+
+    const formData = new FormData();
+    formData.append('file', file);
+    xhr.send(formData);
+  };
+
+  const getStepLabels = () => {
+    switch (creationMode) {
+      case 'link':
+        return ['Creation Mode', 'Engine Selection', 'Host Folder Details', 'Hardware Allocation', 'Configure & Finish'];
+      case 'upload':
+        return ['Creation Mode', 'Engine Selection', 'ZIP File Upload', 'Hardware Allocation', 'Configure & Finish'];
+      default:
+        return ['Creation Mode', 'Engine Selection', 'Version scroll', 'Hardware Allocation', 'Configure & Finish'];
     }
   };
 
@@ -180,9 +272,10 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
     setRamValue(gb);
   };
 
-  const maxRamMB = Math.round(systemRam * 0.85); // restrict max ram allocation safety to 85% of physical limits
+  const maxRamMB = Math.round(systemRam * 0.85); // restrict to 85% of physical limits
+  const stepLabels = getStepLabels();
 
-  // Render progress interface
+  // Rendering the build progress bar
   if (isInstalling) {
     return (
       <div className="card animate-fade-in" style={styles.loadingCard}>
@@ -194,10 +287,12 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
         </div>
         <h2 style={{ marginBottom: '12px', fontSize: '24px' }}>Building Your Minecraft Server</h2>
         <p style={{ color: 'var(--text-secondary)', marginBottom: '32px', textAlign: 'center', maxWidth: '400px' }}>
-          We are fetching core source binaries, building directories, and constructing your configurations on the host filesystem.
+          {creationMode === 'download' 
+            ? 'We are downloading core server files, creating folders, and setting up properties configurations.' 
+            : 'We are creating the server instance and initializing system directories.'}
         </p>
 
-        {downloadProgress && (
+        {creationMode === 'download' && downloadProgress && (
           <div style={styles.progressContainer}>
             <div style={styles.progressBarBg}>
               <div style={{ ...styles.progressBarFill, width: `${downloadProgress.progress || 0}%` }} />
@@ -221,7 +316,7 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
     <div className="card animate-fade-in" style={styles.wizardCard}>
       {/* Wizard Step Markers */}
       <div style={styles.stepsHeader}>
-        {['Engine Selection', 'Version Scroll', 'Hardware Allocation', 'Configure & Finish'].map((label, idx) => (
+        {stepLabels.map((label, idx) => (
           <div key={label} style={{ ...styles.stepMarker, opacity: step === idx + 1 ? 1 : 0.4 }}>
             <div style={{
               ...styles.stepNumber,
@@ -233,8 +328,80 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
         ))}
       </div>
 
-      {/* STEP 1: Engine choice */}
+      {/* STEP 1: Creation Mode selection */}
       {step === 1 && (
+        <div>
+          <h3 style={styles.stepTitle}>Choose Creation Method</h3>
+          <p style={styles.stepDesc}>Decide how you want to set up your Minecraft server instance on the target node.</p>
+          
+          <div style={styles.creationModesGrid}>
+            {/* Mode 1: Download Core */}
+            <div
+              className="card"
+              style={{
+                ...styles.modeCard,
+                borderColor: creationMode === 'download' ? 'var(--color-green-primary)' : 'var(--border-color)',
+                backgroundColor: creationMode === 'download' ? 'rgba(16, 185, 129, 0.03)' : 'var(--bg-secondary)',
+              }}
+              onClick={() => setCreationMode('download')}
+            >
+              <div style={styles.modeIcon}>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--color-green-primary)" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+              </div>
+              <h4 style={{ fontSize: '18px', marginBottom: '8px' }}>Download Fresh Core</h4>
+              <p style={styles.modeText}>Directly pull the latest server core jar (Paper, Purpur, Fabric, Vanilla) from Mojang or community feeds.</p>
+            </div>
+
+            {/* Mode 2: Link Folder */}
+            <div
+              className="card"
+              style={{
+                ...styles.modeCard,
+                borderColor: creationMode === 'link' ? 'var(--color-green-primary)' : 'var(--border-color)',
+                backgroundColor: creationMode === 'link' ? 'rgba(16, 185, 129, 0.03)' : 'var(--bg-secondary)',
+              }}
+              onClick={() => setCreationMode('link')}
+            >
+              <div style={styles.modeIcon}>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--color-info)" strokeWidth="2">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                </svg>
+              </div>
+              <h4 style={{ fontSize: '18px', marginBottom: '8px' }}>Link Existing Host Folder</h4>
+              <p style={styles.modeText}>Import an existing Minecraft server directory currently sitting on the node's local filesystems.</p>
+            </div>
+
+            {/* Mode 3: ZIP Upload */}
+            <div
+              className="card"
+              style={{
+                ...styles.modeCard,
+                borderColor: creationMode === 'upload' ? 'var(--color-green-primary)' : 'var(--border-color)',
+                backgroundColor: creationMode === 'upload' ? 'rgba(16, 185, 129, 0.03)' : 'var(--bg-secondary)',
+              }}
+              onClick={() => setCreationMode('upload')}
+            >
+              <div style={styles.modeIcon}>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--color-warm-primary)" strokeWidth="2">
+                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                  <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                  <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                </svg>
+              </div>
+              <h4 style={{ fontSize: '18px', marginBottom: '8px' }}>Upload Server ZIP</h4>
+              <p style={styles.modeText}>Upload a packaged `.zip` of a pre-configured Minecraft server or template and let the daemon unzip it.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 2: Engine Selection */}
+      {step === 2 && (
         <div>
           <h3 style={styles.stepTitle}>Select Minecraft Engine</h3>
           <p style={styles.stepDesc}>Pick the flavor that fits your gameplay. Performance engines are highly recommended for optimal resource limits.</p>
@@ -267,8 +434,9 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
         </div>
       )}
 
-      {/* STEP 2: Version scrolling */}
-      {step === 2 && (
+      {/* STEP 3: Mode-Specific Settings */}
+      {/* 3a: Version scrolling (For download core mode) */}
+      {step === 3 && creationMode === 'download' && (
         <div>
           <h3 style={styles.stepTitle}>Select Edition Version</h3>
           <p style={styles.stepDesc}>Scroll or search the official builds dynamically sourced from source channels.</p>
@@ -315,8 +483,122 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
         </div>
       )}
 
-      {/* STEP 3: Memory limits */}
-      {step === 3 && (
+      {/* 3b: Path specs (For Link existing mode) */}
+      {step === 3 && creationMode === 'link' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <h3 style={styles.stepTitle}>Host Directory Settings</h3>
+          <p style={styles.stepDesc}>Specify where the existing Minecraft files are located on the remote daemon host.</p>
+          
+          <div style={styles.formItem}>
+            <label style={styles.label}>Server Directory Path (on Linux host)</label>
+            <input
+              type="text"
+              placeholder="e.g. /home/aura/servers/survival_old"
+              value={customPath}
+              onChange={(e) => setCustomPath(e.target.value)}
+              required
+            />
+            <span style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+              Ensure this folder exists and contains your jar core and configs (like <code>server.properties</code>).
+            </span>
+          </div>
+
+          <div style={styles.formItem}>
+            <label style={styles.label}>Server Instance Name</label>
+            <input
+              type="text"
+              placeholder="e.g. survival-old-import"
+              value={instanceName}
+              onChange={(e) => setInstanceName(e.target.value)}
+              required
+            />
+          </div>
+        </div>
+      )}
+
+      {/* 3c: Zip package upload (For ZIP upload mode) */}
+      {step === 3 && creationMode === 'upload' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <h3 style={styles.stepTitle}>ZIP Package Upload</h3>
+          <p style={styles.stepDesc}>Select or drag a standard Minecraft server package (.zip) to upload to the remote host daemon.</p>
+
+          <div 
+            style={{
+              ...styles.uploadArea,
+              borderColor: uploadedZipPath ? 'var(--color-green-primary)' : 'var(--border-color)',
+              backgroundColor: uploadedZipPath ? 'rgba(16, 185, 129, 0.02)' : 'rgba(0,0,0,0.1)'
+            }}
+            onClick={triggerZipUpload}
+          >
+            {uploadedZipPath ? (
+              <div style={styles.uploadSuccessContainer}>
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--color-green-primary)" strokeWidth="2.5">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+                <span style={{ fontWeight: 600, color: 'var(--text-title)', marginTop: '8px' }}>Package Uploaded!</span>
+                <span style={{ fontSize: '12px', color: 'var(--text-secondary)', wordBreak: 'break-all', marginTop: '4px' }}>
+                  {uploadedZipName}
+                </span>
+              </div>
+            ) : zipUploadProgress !== null ? (
+              <div style={{ width: '80%' }}>
+                <span style={{ fontSize: '13px', display: 'block', marginBottom: '8px', color: 'var(--text-primary)' }}>
+                  Uploading core template zip...
+                </span>
+                <div style={styles.progressBarBg}>
+                  <div style={{ ...styles.progressBarFill, width: `${zipUploadProgress}%` }} />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                  <span>Uploading files...</span>
+                  <span>{zipUploadProgress}%</span>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="17 8 12 3 7 8"></polyline>
+                  <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+                <span style={{ display: 'block', fontWeight: 600, marginTop: '8px' }}>Select ZIP Server Archive</span>
+                <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Max upload bounds constrained by your node JRE.</span>
+              </div>
+            )}
+            <input 
+              type="file" 
+              ref={zipInputRef} 
+              style={{ display: 'none' }} 
+              onChange={handleZipFileChange}
+              accept=".zip"
+            />
+          </div>
+
+          <div style={styles.formItem}>
+            <label style={styles.label}>Extraction Folder Path (on Linux host)</label>
+            <input
+              type="text"
+              placeholder="e.g. /home/aura/servers/modded-world"
+              value={customPath}
+              onChange={(e) => setCustomPath(e.target.value)}
+              required
+            />
+          </div>
+
+          <div style={styles.formItem}>
+            <label style={styles.label}>Server Instance Name</label>
+            <input
+              type="text"
+              placeholder="e.g. modded-instance"
+              value={instanceName}
+              onChange={(e) => setInstanceName(e.target.value)}
+              required
+            />
+          </div>
+        </div>
+      )}
+
+      {/* STEP 4: Hardware Allocation */}
+      {step === 4 && (
         <div>
           <h3 style={styles.stepTitle}>Allocate Hardware Resources</h3>
           <p style={styles.stepDesc}>Dedicate system RAM for your Minecraft instance. Custom sliders ensure allocations stay within safe host guidelines.</p>
@@ -413,8 +695,8 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
         </div>
       )}
 
-      {/* STEP 4: Execution choices & finish */}
-      {step === 4 && (
+      {/* STEP 5: Execution choices & finish */}
+      {step === 5 && (
         <div style={styles.finishContainer}>
           <h3 style={styles.stepTitle}>Final Configurations</h3>
           <p style={styles.stepDesc}>Review final configurations and choose where the server runs. Files persist in the host system either way.</p>
@@ -426,6 +708,16 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
               placeholder="e.g. My Survival Server"
               value={instanceName}
               onChange={(e) => setInstanceName(e.target.value)}
+            />
+          </div>
+
+          <div style={styles.formItem}>
+            <label style={styles.label}>Absolute Server Directory Path (on node host)</label>
+            <input
+              type="text"
+              placeholder="e.g. /home/aura/servers/survival-core"
+              value={customPath}
+              onChange={(e) => setCustomPath(e.target.value)}
             />
           </div>
 
@@ -473,17 +765,21 @@ export default function SetupWizard({ token, onComplete, onCancel }) {
           </button>
         )}
 
-        {step < 4 ? (
+        {step < 5 ? (
           <button
             className="btn btn-primary"
-            disabled={step === 2 && !selectedVersion}
+            disabled={
+              (step === 3 && creationMode === 'download' && !selectedVersion) ||
+              (step === 3 && creationMode === 'upload' && !uploadedZipPath) ||
+              (step === 3 && creationMode === 'link' && !customPath)
+            }
             onClick={() => setStep(step + 1)}
           >
             Next Step
           </button>
         ) : (
           <button className="btn btn-primary" onClick={handleBuild}>
-            Build Server Core
+            {creationMode === 'link' ? 'Link Instance' : creationMode === 'upload' ? 'Extract & Setup' : 'Build Server Core'}
           </button>
         )}
       </div>
@@ -497,7 +793,7 @@ const styles = {
     backgroundColor: 'var(--bg-secondary)',
     border: '1px solid var(--border-color)',
     borderRadius: '18px',
-    maxWidth: '900px',
+    maxWidth: '950px',
     margin: '0 auto',
     boxShadow: '0 8px 30px rgba(0,0,0,0.4)',
   },
@@ -611,6 +907,33 @@ const styles = {
     fontSize: '14px',
     marginBottom: '28px',
   },
+  creationModesGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+    gap: '20px',
+    marginTop: '10px'
+  },
+  modeCard: {
+    cursor: 'pointer',
+    padding: '28px',
+    transition: 'all var(--transition-normal)',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    boxShadow: 'none'
+  },
+  modeIcon: {
+    marginBottom: '20px',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    padding: '12px',
+    borderRadius: '12px',
+    border: '1px solid var(--border-color)'
+  },
+  modeText: {
+    fontSize: '13px',
+    color: 'var(--text-secondary)',
+    lineHeight: '1.5'
+  },
   enginesGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
@@ -681,6 +1004,24 @@ const styles = {
     textAlign: 'center',
     color: 'var(--text-secondary)',
     fontSize: '14px',
+  },
+  uploadArea: {
+    border: '2px dashed var(--border-color)',
+    borderRadius: 'var(--radius-lg)',
+    padding: '40px 20px',
+    textAlign: 'center',
+    cursor: 'pointer',
+    transition: 'all var(--transition-normal)',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '12px'
+  },
+  uploadSuccessContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center'
   },
   ramGrid: {
     display: 'grid',
@@ -804,12 +1145,10 @@ const styles = {
     borderTop: '1px solid var(--border-color)',
     paddingTop: '24px',
   },
-
-  /* Custom Switch Slider */
   switch: {
     position: 'relative',
     display: 'inline-block',
     width: '46px',
     height: '24px',
-  },
+  }
 };

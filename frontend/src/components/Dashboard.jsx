@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
+import FileBrowser from './FileBrowser.jsx';
 
-export default function Dashboard({ token, activeInstance, setActiveInstance }) {
+export default function Dashboard({ token, activeDaemon, activeInstance, setActiveInstance }) {
   const [instances, setInstances] = useState([]);
-  const [currentTab, setCurrentTab] = useState('terminal'); // 'terminal' or 'settings'
+  const [currentTab, setCurrentTab] = useState('terminal'); // 'terminal', 'files', 'settings'
   const [properties, setProperties] = useState({});
   const [savingSettings, setSavingSettings] = useState(false);
 
@@ -13,43 +14,48 @@ export default function Dashboard({ token, activeInstance, setActiveInstance }) 
   const terminalEndRef = useRef(null);
   const wsRef = useRef(null);
 
-  // Load instances
+  // Load instances on the active daemon node
   const fetchInstances = () => {
-    fetch('/api/instances', {
+    if (!activeDaemon) return;
+    fetch(`/api/proxy/daemons/${activeDaemon.id}/instances`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
       .then(res => res.json())
       .then(data => {
-        setInstances(data);
-        if (data.length > 0 && !activeInstance) {
-          setActiveInstance(data[0]);
+        if (Array.isArray(data)) {
+          setInstances(data);
+          if (data.length > 0 && !activeInstance) {
+            setActiveInstance(data[0]);
+          }
+        } else {
+          setInstances([]);
         }
       })
-      .catch(err => console.error('Failed to load server list:', err));
+      .catch(err => console.error('Failed to load server list from node:', err));
   };
 
   useEffect(() => {
     fetchInstances();
-    // Poll list state every 5 seconds to sync background state changes (like download completes)
+    // Poll list state every 5 seconds to sync background states
     const interval = setInterval(fetchInstances, 5000);
     return () => clearInterval(interval);
-  }, [token]);
+  }, [token, activeDaemon]);
 
   // Load instance properties when tab changes to settings
   useEffect(() => {
-    if (activeInstance && currentTab === 'settings') {
-      fetch(`/api/instances/${activeInstance.id}/properties`, {
+    if (activeDaemon && activeInstance && currentTab === 'settings') {
+      fetch(`/api/proxy/daemons/${activeDaemon.id}/instances/${activeInstance.id}/properties`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
         .then(res => res.json())
         .then(data => setProperties(data))
         .catch(err => console.error('Failed to load config properties:', err));
     }
-  }, [activeInstance, currentTab, token]);
+  }, [activeDaemon, activeInstance, currentTab, token]);
 
   // Handle WebSocket Terminal connections
   useEffect(() => {
-    if (!activeInstance) return;
+    if (!activeDaemon || !activeInstance) return;
 
     setLogs([]);
     setLiveStats({ systemCpu: 0, systemRamUsed: 0, systemRamTotal: 1, processCpu: 0, processRam: 0 });
@@ -58,37 +64,40 @@ export default function Dashboard({ token, activeInstance, setActiveInstance }) 
       wsRef.current.close();
     }
 
-    // Connect WebSocket
+    // Connect WebSocket through panel proxy
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws-terminal?token=${token}&instanceId=${activeInstance.id}`;
+    const wsUrl = `${protocol}//${window.location.host}/api/proxy/ws-terminal?token=${token}&daemonId=${activeDaemon.id}&instanceId=${activeInstance.id}`;
     
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onmessage = (event) => {
-      const packet = JSON.parse(event.data);
-      
-      if (packet.type === 'history') {
-        setLogs(packet.data);
-      } else if (packet.type === 'log') {
-        setLogs(prev => [...prev, packet.data].slice(-1000));
-      } else if (packet.type === 'stats') {
-        setLiveStats(packet.data);
+      try {
+        const packet = JSON.parse(event.data);
+        if (packet.type === 'history') {
+          setLogs(packet.data);
+        } else if (packet.type === 'log') {
+          setLogs(prev => [...prev, packet.data].slice(-1000));
+        } else if (packet.type === 'stats') {
+          setLiveStats(packet.data);
+        }
+      } catch (e) {
+        console.error('Failed to parse WebSocket packet:', e);
       }
     };
 
     ws.onerror = (e) => {
-      setLogs(prev => [...prev, '[Panel Error] Terminal socket disconnected.'].slice(-1000));
+      setLogs(prev => [...prev, '[Panel Proxy] Terminal socket disconnected.'].slice(-1000));
     };
 
     ws.onclose = () => {
-      // Clean handle
+      // Clean disconnect
     };
 
     return () => {
       if (wsRef.current) wsRef.current.close();
     };
-  }, [activeInstance, token]);
+  }, [activeDaemon, activeInstance, token]);
 
   // Auto-scroll terminal logs
   useEffect(() => {
@@ -97,9 +106,9 @@ export default function Dashboard({ token, activeInstance, setActiveInstance }) 
 
   // Server Instance Actions
   const handleControlAction = async (action) => {
-    if (!activeInstance) return;
+    if (!activeDaemon || !activeInstance) return;
     try {
-      const res = await fetch(`/api/instances/${activeInstance.id}/${action}`, {
+      const res = await fetch(`/api/proxy/daemons/${activeDaemon.id}/instances/${activeInstance.id}/${action}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -115,15 +124,21 @@ export default function Dashboard({ token, activeInstance, setActiveInstance }) 
   };
 
   const handleDeleteInstance = async () => {
-    if (!activeInstance) return;
-    if (!confirm(`Are you absolutely sure you want to delete "${activeInstance.name}"? This deletes all server jar files, properties, and world saves permanently from the host system.`)) {
-      return;
-    }
+    if (!activeDaemon || !activeInstance) return;
+    
+    const deleteFiles = confirm(
+      `Are you absolutely sure you want to delete "${activeInstance.name}"?\n\nPress OK to delete the server metadata and completely wipe its server folder/files from the host node filesystem.\nPress Cancel to abort.`
+    );
+    if (!deleteFiles) return;
 
     try {
-      const res = await fetch(`/api/instances/${activeInstance.id}`, {
+      const res = await fetch(`/api/proxy/daemons/${activeDaemon.id}/instances/${activeInstance.id}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({ deleteFiles: true })
       });
       if (!res.ok) throw new Error('Deletion failed');
       setActiveInstance(null);
@@ -137,10 +152,10 @@ export default function Dashboard({ token, activeInstance, setActiveInstance }) 
     e.preventDefault();
     if (!commandInput.trim() || !wsRef.current) return;
 
-    wsRef.current.send(JSON.stringify({ type: 'command', data: commandInput }));
+    wsRef.current.send(commandInput.trim());
     
     // Add command locally for visual instant responsiveness
-    setLogs(prev => [...prev, `> ${commandInput}`]);
+    setLogs(prev => [...prev, `> ${commandInput.trim()}`]);
     setCommandInput('');
   };
 
@@ -148,7 +163,7 @@ export default function Dashboard({ token, activeInstance, setActiveInstance }) 
     e.preventDefault();
     setSavingSettings(true);
     try {
-      const res = await fetch(`/api/instances/${activeInstance.id}/properties`, {
+      const res = await fetch(`/api/proxy/daemons/${activeDaemon.id}/instances/${activeInstance.id}/properties`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -199,7 +214,7 @@ export default function Dashboard({ token, activeInstance, setActiveInstance }) 
         </h3>
         <div style={styles.instancesScroll}>
           {instances.length === 0 ? (
-            <div style={styles.emptySidebar}>No instances found. Create one using the button in the top right.</div>
+            <div style={styles.emptySidebar}>No instances found on this node. Click "+ Create Server" in the top right.</div>
           ) : (
             instances.map(inst => {
               const isActive = activeInstance && activeInstance.id === inst.id;
@@ -209,6 +224,7 @@ export default function Dashboard({ token, activeInstance, setActiveInstance }) 
               if (inst.status === 'running') statusColor = 'var(--color-green-primary)';
               else if (inst.status === 'starting' || inst.status === 'stopping') statusColor = 'var(--color-warning)';
               else if (inst.status === 'need_eula' || inst.status === 'failed') statusColor = 'var(--color-error)';
+              else if (inst.status === 'installing') statusColor = 'var(--color-info)';
 
               return (
                 <div
@@ -252,7 +268,7 @@ export default function Dashboard({ token, activeInstance, setActiveInstance }) 
           <div className="card animate-fade-in" style={styles.instanceHeaderCard}>
             <div>
               <h2 style={{ fontSize: '24px', marginBottom: '4px' }}>{activeInstance.name}</h2>
-              <div style={{ display: 'flex', gap: '16px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+              <div style={{ display: 'flex', gap: '16px', fontSize: '13px', color: 'var(--text-secondary)', flexWrap: 'wrap' }}>
                 <span>Engine: <strong style={{ color: 'var(--text-title)' }}>{activeInstance.edition.toUpperCase()}</strong></span>
                 <span>Version: <strong style={{ color: 'var(--text-title)' }}>{activeInstance.version}</strong></span>
                 <span>Port: <strong style={{ color: 'var(--text-title)' }}>{activeInstance.port}</strong></span>
@@ -279,7 +295,7 @@ export default function Dashboard({ token, activeInstance, setActiveInstance }) 
               ) : activeInstance.status === 'stopping' ? (
                 <button className="btn btn-secondary" disabled>Stopping...</button>
               ) : activeInstance.status === 'installing' ? (
-                <button className="btn btn-secondary" disabled>Downloading Jar...</button>
+                <button className="btn btn-secondary" disabled>Setting Up...</button>
               ) : null}
             </div>
           </div>
@@ -313,6 +329,16 @@ export default function Dashboard({ token, activeInstance, setActiveInstance }) 
               onClick={() => setCurrentTab('terminal')}
             >
               Interactive Console
+            </button>
+            <button
+              style={{
+                ...styles.tabItem,
+                borderColor: currentTab === 'files' ? 'var(--color-green-primary)' : 'transparent',
+                color: currentTab === 'files' ? 'var(--text-title)' : 'var(--text-secondary)'
+              }}
+              onClick={() => setCurrentTab('files')}
+            >
+              File Explorer
             </button>
             <button
               style={{
@@ -424,6 +450,15 @@ export default function Dashboard({ token, activeInstance, setActiveInstance }) 
             </div>
           )}
 
+          {/* TAB CONTENT: FILE EXPLORER */}
+          {currentTab === 'files' && (
+            <FileBrowser
+              token={token}
+              activeDaemon={activeDaemon}
+              instance={activeInstance}
+            />
+          )}
+
           {/* TAB CONTENT: PROPERTIES EDITOR */}
           {currentTab === 'settings' && (
             <div className="card animate-fade-in" style={styles.settingsCard}>
@@ -439,7 +474,6 @@ export default function Dashboard({ token, activeInstance, setActiveInstance }) 
               ) : (
                 <form onSubmit={handleSaveProperties} style={styles.propertiesForm}>
                   <div style={styles.propsGrid}>
-                    {/* Common Properties */}
                     <div style={styles.propsRow}>
                       <label style={styles.propLabel}>Game Mode</label>
                       <select
@@ -559,7 +593,7 @@ export default function Dashboard({ token, activeInstance, setActiveInstance }) 
             </svg>
             <h3 style={{ margin: '16px 0 6px' }}>No Active Minecraft Server</h3>
             <p style={{ color: 'var(--text-secondary)', fontSize: '14px', maxWidth: '360px', textAlign: 'center', marginBottom: '24px' }}>
-              Welcome! You haven't added any server instances yet. Click the create button to compile a version core.
+              Welcome! You haven't added any server instances yet on this node. Click "+ Create Server" to build one now.
             </p>
           </div>
         </div>
@@ -616,6 +650,8 @@ const styles = {
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: '24px 32px',
+    flexWrap: 'wrap',
+    gap: '16px'
   },
   runControls: {
     display: 'flex',
@@ -637,6 +673,7 @@ const styles = {
     borderBottom: '1px solid var(--border-color)',
     gap: '24px',
     paddingBottom: '2px',
+    flexWrap: 'wrap'
   },
   tabItem: {
     background: 'none',

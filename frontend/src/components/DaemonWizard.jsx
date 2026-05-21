@@ -1,0 +1,220 @@
+import React, { useState } from 'react';
+
+export default function DaemonWizard({ token, onComplete }) {
+  const [name, setName] = useState('AuraNode-1');
+  const [ip, setIp] = useState('127.0.0.1');
+  const [port, setPort] = useState('21013');
+  const [key, setKey] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    if (!name || !ip || !port || !key) {
+      setError('All fields are required to register a new node.');
+      setLoading(false);
+      return;
+    }
+
+    try {
+      // 1. Register the Daemon Node in the Panel DB
+      const res = await fetch('/api/daemons', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ name, ip, port, key })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to register node.');
+
+      // 2. Perform connection ping test
+      const testRes = await fetch(`/api/daemons/${data.daemon.id}/test-connection`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const testData = await testRes.json();
+
+      if (!testRes.ok || !testData.success) {
+        throw new Error(testData.error || 'Registered, but failed connection ping handshake. Check daemon service is running and ports are open.');
+      }
+
+      onComplete(data.daemon);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={styles.container}>
+      <div className="card animate-fade-in" style={styles.card}>
+        <div style={styles.header}>
+          <div style={styles.iconContainer}>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{color: 'var(--color-green-primary)'}}>
+              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+              <line x1="6" y1="6" x2="6.01" y2="6"/>
+              <line x1="6" y1="18" x2="6.01" y2="18"/>
+            </svg>
+          </div>
+          <h2 style={{ fontSize: '22px', marginBottom: '4px' }}>Connect Your Remote Server</h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '13px', textAlign: 'center' }}>
+            AuraPanel acts as a centralized dashboard. You need to connect an agent (daemon node) executing on your Linux host.
+          </p>
+        </div>
+
+        {error && (
+          <div style={{
+            ...styles.alert,
+            backgroundColor: error.includes('handshake') ? 'rgba(245, 158, 11, 0.1)' : 'var(--color-error-glow)',
+            borderColor: error.includes('handshake') ? 'var(--color-warning)' : 'var(--color-error)',
+            color: error.includes('handshake') ? 'var(--color-warning)' : 'var(--color-error)',
+          }}>
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} style={styles.form}>
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>Node Display Name</label>
+            <input
+              type="text"
+              placeholder="e.g. London-Vps-Primary"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              disabled={loading}
+              required
+            />
+          </div>
+
+          <div style={styles.formRow}>
+            <div style={{ ...styles.inputGroup, flex: 2 }}>
+              <label style={styles.label}>IP Address / Domain</label>
+              <input
+                type="text"
+                placeholder="e.g. 192.168.1.100 or node.domain.com"
+                value={ip}
+                onChange={(e) => setIp(e.target.value)}
+                disabled={loading}
+                required
+              />
+            </div>
+            <div style={{ ...styles.inputGroup, flex: 1 }}>
+              <label style={styles.label}>Daemon Port</label>
+              <input
+                type="number"
+                placeholder="21013"
+                value={port}
+                onChange={(e) => setPort(e.target.value)}
+                disabled={loading}
+                required
+              />
+            </div>
+          </div>
+
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>Security Token (Daemon Key)</label>
+            <input
+              type="password"
+              placeholder="Paste generated 32-character security key"
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+              disabled={loading}
+              required
+            />
+            <span style={styles.hint}>
+              Start `AuraDaemon` on your server. It prints its autogenerated security key on its initial launch logs.
+            </span>
+          </div>
+
+          <button
+            type="submit"
+            className="btn btn-primary"
+            style={{ width: '100%', marginTop: '10px' }}
+            disabled={loading}
+          >
+            {loading ? 'Performing Handshake Pings...' : 'Register Node'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+const styles = {
+  container: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: '80vh',
+    padding: '20px',
+  },
+  card: {
+    width: '100%',
+    maxWidth: '520px',
+    padding: '40px',
+    backgroundColor: 'var(--bg-secondary)',
+    border: '1px solid var(--border-color)',
+    borderRadius: '18px',
+    boxShadow: '0 8px 30px rgba(0,0,0,0.4)',
+  },
+  header: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    marginBottom: '28px',
+  },
+  iconContainer: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '56px',
+    height: '56px',
+    borderRadius: '14px',
+    backgroundColor: 'var(--bg-tertiary)',
+    border: '1px solid var(--border-color)',
+    marginBottom: '16px',
+  },
+  form: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '18px',
+  },
+  formRow: {
+    display: 'flex',
+    gap: '16px',
+  },
+  inputGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+  },
+  label: {
+    fontSize: '11px',
+    fontWeight: '600',
+    color: 'var(--text-secondary)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+  hint: {
+    fontSize: '11px',
+    color: 'var(--text-secondary)',
+    marginTop: '4px',
+    lineHeight: '1.4',
+  },
+  alert: {
+    padding: '12px 16px',
+    borderRadius: '12px',
+    border: '1px solid',
+    fontSize: '13px',
+    marginBottom: '24px',
+    textAlign: 'center',
+  }
+};

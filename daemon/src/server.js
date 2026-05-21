@@ -153,6 +153,30 @@ app.post('/api/files/unzip', (req, res) => {
 
 app.post('/api/files/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
+  
+  const { targetPath } = req.query;
+  if (targetPath) {
+    try {
+      const dest = path.resolve(targetPath);
+      const parent = path.dirname(dest);
+      if (!fs.existsSync(parent)) {
+        fs.mkdirSync(parent, { recursive: true });
+      }
+      fs.copyFileSync(req.file.path, dest);
+      fs.unlinkSync(req.file.path);
+      return res.json({
+        success: true,
+        fileName: req.file.originalname,
+        filePath: dest
+      });
+    } catch (e) {
+      if (fs.existsSync(req.file.path)) {
+        try { fs.unlinkSync(req.file.path); } catch (err) {}
+      }
+      return res.status(500).json({ error: `Failed to write file to target path: ${e.message}` });
+    }
+  }
+
   res.json({
     success: true,
     fileName: req.file.filename,
