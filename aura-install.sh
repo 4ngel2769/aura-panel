@@ -22,6 +22,40 @@ CYAN='\e[36m'
 BOLD='\e[1m'
 NC='\e[0m' # No Color
 
+# ==============================================================================
+# Parse Command Line Arguments/Flags
+# ==============================================================================
+MODE_REPAIR=false
+MODE_REPAIR_CLI=false
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --fix|--repair)
+      MODE_REPAIR=true
+      shift
+      ;;
+    --fix-cli|--repair-cli)
+      MODE_REPAIR_CLI=true
+      shift
+      ;;
+    -h|--help)
+      echo -e "${BOLD}${CYAN}==========================================================${NC}"
+      echo -e "${BOLD}    Aura Guided Linux Installer Options${NC}"
+      echo -e "${BOLD}${CYAN}==========================================================${NC}"
+      echo -e "  ${YELLOW}--fix, --repair${NC}       Repair/refresh an existing installation with current configurations."
+      echo -e "  ${YELLOW}--fix-cli, --repair-cli${NC}   Repair/refresh only the global 'aura' CLI administration helper."
+      echo -e "  ${YELLOW}-h, --help${NC}            Show this help information."
+      echo -e "${BOLD}${CYAN}==========================================================${NC}"
+      exit 0
+      ;;
+    *)
+      echo -e "${RED}Error: Unknown option '$1'${NC}"
+      echo "Use -h or --help to see available options."
+      exit 1
+      ;;
+  esac
+done
+
 echo -e "${BOLD}${CYAN}"
 echo "=========================================================="
 echo "    Aura Platform Guided Linux Installer"
@@ -47,24 +81,154 @@ prompt_user() {
   eval "$var_name=\"\${input_val:-\$default_val}\""
 }
 
-# 1. Ask what to install
-echo -e "${BOLD}Select Installation Mode:${NC}"
-echo "  1) Central Panel & Local Daemon (Full Setup) [Default]"
-echo "  2) Central Panel Only (Controller Node)"
-echo "  3) Daemon Only (Runner Agent Node)"
-prompt_user "Enter choice (1-3) [Default: 1]: " "1" "INSTALL_MODE"
-
-# 2. Directory prompt
-prompt_user "Enter installation root directory [Default: /opt/aura]: " "/opt/aura" "AURA_ROOT"
-
-# 3. Ports prompts
-if [ "$INSTALL_MODE" -eq 1 ] || [ "$INSTALL_MODE" -eq 2 ]; then
-  prompt_user "Enter AuraPanel Web Port [Default: 3000]: " "3000" "PANEL_PORT"
+# Auto-detect existing Aura installation if in repair mode
+if [ "$MODE_REPAIR" = true ] || [ "$MODE_REPAIR_CLI" = true ]; then
+  echo -e "${BLUE}* Auto-detecting existing Aura installation...${NC}"
+  
+  # Resolve AURA_ROOT from symlink target first
+  if [ -L "/usr/local/bin/aura" ]; then
+    AURA_LINK_TARGET=$(readlink -f /usr/local/bin/aura)
+    AURA_ROOT=$(dirname "$AURA_LINK_TARGET")
+  fi
+  
+  # Fallback to checking default directory
+  if [ -z "$AURA_ROOT" ] || [ ! -d "$AURA_ROOT" ]; then
+    AURA_ROOT="/opt/aura"
+  fi
+  
+  if [ -d "$AURA_ROOT" ]; then
+    echo -e "${GREEN}✔ Detected installation root: $AURA_ROOT${NC}"
+  else
+    if [ "$MODE_REPAIR_CLI" = true ]; then
+      echo -e "${YELLOW}⚠ Could not find existing installation directory. Defaulting root to /opt/aura.${NC}"
+      AURA_ROOT="/opt/aura"
+    else
+      echo -e "${RED}Error: No existing Aura installation found to repair at $AURA_ROOT.${NC}"
+      echo "Please run a fresh guided installation by executing the script without flags."
+      exit 1
+    fi
+  fi
 fi
 
-if [ "$INSTALL_MODE" -eq 1 ] || [ "$INSTALL_MODE" -eq 3 ]; then
-  prompt_user "Enter AuraDaemon Listen Port [Default: 21013]: " "21013" "DAEMON_PORT"
-  prompt_user "Enter AuraDaemon Bind Address [Default: 0.0.0.0]: " "0.0.0.0" "DAEMON_BIND"
+# Targeted repair logic for 'aura' CLI individually
+if [ "$MODE_REPAIR_CLI" = true ]; then
+  echo -e "\n${BLUE}* Repairing global 'aura' CLI Helper tool...${NC}"
+  
+  REPO_URL="https://github.com/4ngel2769/aura-panel.git"
+  TEMP_REPO="/tmp/aura-panel-repo"
+  
+  # Resolve sources
+  if [ -d "./panel" ] && [ -d "./daemon" ] && [ -d "./frontend" ]; then
+    echo -e "${GREEN}✔ Running inside the deployment source tree. Copying files directly...${NC}"
+    SRC_DIR="$(pwd)"
+  else
+    echo -e "${BLUE}* Cloning latest codebase from GitHub...${NC}"
+    rm -rf "$TEMP_REPO"
+    git clone "$REPO_URL" "$TEMP_REPO"
+    SRC_DIR="$TEMP_REPO"
+  fi
+  
+  # Ensure AURA_ROOT directory exists
+  mkdir -p "$AURA_ROOT"
+  
+  # Deploy CLI
+  cp "$SRC_DIR/aura-cli.js" "$AURA_ROOT/aura-cli.js"
+  chmod +x "$AURA_ROOT/aura-cli.js"
+  ln -sf "$AURA_ROOT/aura-cli.js" /usr/local/bin/aura
+  
+  # Cleanup if temp repo was cloned
+  if [ -d "$TEMP_REPO" ]; then
+    rm -rf "$TEMP_REPO"
+  fi
+  
+  echo -e "\n${GREEN}${BOLD}=========================================================="
+  echo "    Aura CLI Repair Completed Successfully!"
+  echo -e "==========================================================${NC}"
+  echo -e "  - Global 'aura' command linked to /usr/local/bin/aura"
+  echo -e "  - Corrected file located at $AURA_ROOT/aura-cli.js"
+  echo "=========================================================="
+  exit 0
+fi
+
+# Detect configuration settings if in full repair mode
+if [ "$MODE_REPAIR" = true ]; then
+  echo -e "\n${BLUE}* Loading existing configurations for repair...${NC}"
+  
+  # 1. Detect if panel is installed
+  HAS_PANEL=false
+  if [ -d "$AURA_ROOT/panel" ] || [ -f /etc/systemd/system/aura-panel.service ]; then
+    HAS_PANEL=true
+  fi
+  
+  # 2. Detect if daemon is installed
+  HAS_DAEMON=false
+  if [ -d "$AURA_ROOT/daemon" ] || [ -f /etc/systemd/system/aura-daemon.service ]; then
+    HAS_DAEMON=true
+  fi
+  
+  # Determine INSTALL_MODE based on what we found
+  if [ "$HAS_PANEL" = true ] && [ "$HAS_DAEMON" = true ]; then
+    INSTALL_MODE=1
+    echo -e "  - Mode detected: ${CYAN}Central Panel & Local Daemon (Full Setup)${NC}"
+  elif [ "$HAS_PANEL" = true ]; then
+    INSTALL_MODE=2
+    echo -e "  - Mode detected: ${CYAN}Central Panel Only (Controller Node)${NC}"
+  elif [ "$HAS_DAEMON" = true ]; then
+    INSTALL_MODE=3
+    echo -e "  - Mode detected: ${CYAN}Daemon Only (Runner Agent Node)${NC}"
+  else
+    echo -e "${RED}Error: Could not determine existing installation components.${NC}"
+    exit 1
+  fi
+  
+  # 3. Extract Panel Port
+  PANEL_PORT="3000"
+  if [ -f /etc/systemd/system/aura-panel.service ]; then
+    DETECTED_PORT=$(grep -oP 'Environment=PORT=\K[0-9]+' /etc/systemd/system/aura-panel.service || true)
+    if [ -n "$DETECTED_PORT" ]; then
+      PANEL_PORT="$DETECTED_PORT"
+      echo -e "  - Detected Panel Port: ${CYAN}$PANEL_PORT${NC}"
+    fi
+  fi
+  
+  # 4. Extract Daemon Port & Bind Address
+  DAEMON_PORT="21013"
+  DAEMON_BIND="0.0.0.0"
+  if [ -f "$AURA_ROOT/daemon/config.json" ]; then
+    # Try using node first, fall back to grep
+    DETECTED_DPORT=$(node -e "console.log(require('$AURA_ROOT/daemon/config.json').port)" 2>/dev/null || grep -oP '"port":\s*\K[0-9]+' "$AURA_ROOT/daemon/config.json" || true)
+    DETECTED_DBIND=$(node -e "console.log(require('$AURA_ROOT/daemon/config.json').address)" 2>/dev/null || grep -oP '"address":\s*"\K[^"]+' "$AURA_ROOT/daemon/config.json" || true)
+    if [ -n "$DETECTED_DPORT" ]; then
+      DAEMON_PORT="$DETECTED_DPORT"
+      echo -e "  - Detected Daemon Port: ${CYAN}$DAEMON_PORT${NC}"
+    fi
+    if [ -n "$DETECTED_DBIND" ]; then
+      DAEMON_BIND="$DETECTED_DBIND"
+      echo -e "  - Detected Daemon Bind Address: ${CYAN}$DAEMON_BIND${NC}"
+    fi
+  fi
+fi
+
+# 1. Ask what to install
+if [ "$MODE_REPAIR" = false ]; then
+  echo -e "${BOLD}Select Installation Mode:${NC}"
+  echo "  1) Central Panel & Local Daemon (Full Setup) [Default]"
+  echo "  2) Central Panel Only (Controller Node)"
+  echo "  3) Daemon Only (Runner Agent Node)"
+  prompt_user "Enter choice (1-3) [Default: 1]: " "1" "INSTALL_MODE"
+
+  # 2. Directory prompt
+  prompt_user "Enter installation root directory [Default: /opt/aura]: " "/opt/aura" "AURA_ROOT"
+
+  # 3. Ports prompts
+  if [ "$INSTALL_MODE" -eq 1 ] || [ "$INSTALL_MODE" -eq 2 ]; then
+    prompt_user "Enter AuraPanel Web Port [Default: 3000]: " "3000" "PANEL_PORT"
+  fi
+
+  if [ "$INSTALL_MODE" -eq 1 ] || [ "$INSTALL_MODE" -eq 3 ]; then
+    prompt_user "Enter AuraDaemon Listen Port [Default: 21013]: " "21013" "DAEMON_PORT"
+    prompt_user "Enter AuraDaemon Bind Address [Default: 0.0.0.0]: " "0.0.0.0" "DAEMON_BIND"
+  fi
 fi
 
 echo -e "\n${BLUE}* Verifying system dependencies...${NC}"
