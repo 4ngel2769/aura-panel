@@ -340,8 +340,8 @@ async function handleNodesLs() {
       const testUrl = `http://${d.ip}:${d.port}/api/system/stats`;
       const res = await makeRequest(testUrl, 'GET', { 'X-Daemon-Key': d.key }, null, 1500);
       const statusStr = res.success ? `${C.green}ONLINE${C.reset}` : `${C.red}OFFLINE${C.reset}`;
-      
-      console.log(`  ${d.id.padEnd(20)} ${d.name.substring(0, 20).padEnd(22)} `${d.ip}:${d.port}`.substring(0, 22).padEnd(22)} ${statusStr}`);
+      const endpoint = `${d.ip}:${d.port}`;
+      console.log(`  ${d.id.padEnd(20)} ${d.name.substring(0, 20).padEnd(22)} ${endpoint.substring(0, 22).padEnd(22)} ${statusStr}`);
     });
 
     await Promise.all(checks);

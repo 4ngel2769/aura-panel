@@ -19,17 +19,48 @@ export const secureHeaders = helmet({
   crossOriginEmbedderPolicy: false,
 });
 
-export const corsOptions = cors({
-  origin: (origin, callback) => {
-    if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
-      callback(null, true);
-    } else {
-      callback(new Error('Blocked by CORS policy'));
+export const corsOptions = cors((req, callback) => {
+  const origin = req.header('Origin');
+  let allowed = false;
+
+  if (!origin) {
+    allowed = true;
+  } else {
+    try {
+      const parsedOrigin = new URL(origin);
+      const host = req.header('Host');
+      
+      // 1. Allow if it matches the Host header (same origin)
+      if (host && (parsedOrigin.host === host)) {
+        allowed = true;
+      }
+      // 2. Allow localhost/127.0.0.1
+      else if (parsedOrigin.hostname === 'localhost' || parsedOrigin.hostname === '127.0.0.1') {
+        allowed = true;
+      }
+      // 3. Allow private network LAN IPs
+      else if (
+        parsedOrigin.hostname.startsWith('192.168.') ||
+        parsedOrigin.hostname.startsWith('10.') ||
+        /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(parsedOrigin.hostname)
+      ) {
+        allowed = true;
+      }
+    } catch (e) {
+      allowed = false;
     }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  }
+
+  if (allowed) {
+    callback(null, {
+      origin: true,
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+    });
+  } else {
+    callback(new Error('Blocked by CORS policy'));
+  }
 });
 
 export const loginLimiter = rateLimit({
