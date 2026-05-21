@@ -28,29 +28,43 @@ echo "    Aura Platform Guided Linux Installer"
 echo "=========================================================="
 echo -e "${NC}"
 
+# Helper function to read input safely, redirecting from /dev/tty if stdin is piped
+prompt_user() {
+  local prompt_text="$1"
+  local default_val="$2"
+  local var_name="$3"
+  local input_val
+  
+  if [ -t 0 ]; then
+    read -rp "$prompt_text" input_val
+  elif [ -c /dev/tty ]; then
+    read -rp "$prompt_text" input_val < /dev/tty
+  else
+    input_val=""
+  fi
+  
+  # Indirect variable assignment with default fallback
+  eval "$var_name=\"\${input_val:-\$default_val}\""
+}
+
 # 1. Ask what to install
 echo -e "${BOLD}Select Installation Mode:${NC}"
 echo "  1) Central Panel & Local Daemon (Full Setup) [Default]"
 echo "  2) Central Panel Only (Controller Node)"
 echo "  3) Daemon Only (Runner Agent Node)"
-read -rp "Enter choice (1-3) [Default: 1]: " INSTALL_MODE
-INSTALL_MODE=${INSTALL_MODE:-1}
+prompt_user "Enter choice (1-3) [Default: 1]: " "1" "INSTALL_MODE"
 
 # 2. Directory prompt
-read -rp "Enter installation root directory [Default: /opt/aura]: " AURA_ROOT
-AURA_ROOT=${AURA_ROOT:-/opt/aura}
+prompt_user "Enter installation root directory [Default: /opt/aura]: " "/opt/aura" "AURA_ROOT"
 
 # 3. Ports prompts
 if [ "$INSTALL_MODE" -eq 1 ] || [ "$INSTALL_MODE" -eq 2 ]; then
-  read -rp "Enter AuraPanel Web Port [Default: 3000]: " PANEL_PORT
-  PANEL_PORT=${PANEL_PORT:-3000}
+  prompt_user "Enter AuraPanel Web Port [Default: 3000]: " "3000" "PANEL_PORT"
 fi
 
 if [ "$INSTALL_MODE" -eq 1 ] || [ "$INSTALL_MODE" -eq 3 ]; then
-  read -rp "Enter AuraDaemon Listen Port [Default: 21013]: " DAEMON_PORT
-  DAEMON_PORT=${DAEMON_PORT:-21013}
-  read -rp "Enter AuraDaemon Bind Address [Default: 0.0.0.0]: " DAEMON_BIND
-  DAEMON_BIND=${DAEMON_BIND:-0.0.0.0}
+  prompt_user "Enter AuraDaemon Listen Port [Default: 21013]: " "21013" "DAEMON_PORT"
+  prompt_user "Enter AuraDaemon Bind Address [Default: 0.0.0.0]: " "0.0.0.0" "DAEMON_BIND"
 fi
 
 echo -e "\n${BLUE}* Verifying system dependencies...${NC}"
