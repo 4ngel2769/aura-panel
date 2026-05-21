@@ -355,9 +355,9 @@ if [ "$MODE_REPAIR" = true ]; then
   DAEMON_PORT="21013"
   DAEMON_BIND="0.0.0.0"
   if [ -f "$AURA_ROOT/daemon/config.json" ]; then
-    # Try using node first, fall back to grep
-    DETECTED_DPORT=$(node -e "console.log(require('$AURA_ROOT/daemon/config.json').port)" 2>/dev/null || grep -oP '"port":\s*\K[0-9]+' "$AURA_ROOT/daemon/config.json" || true)
-    DETECTED_DBIND=$(node -e "console.log(require('$AURA_ROOT/daemon/config.json').address)" 2>/dev/null || grep -oP '"address":\s*"\K[^"]+' "$AURA_ROOT/daemon/config.json" || true)
+    # Use grep to extract values from JSON (more reliable than require in mixed module contexts)
+    DETECTED_DPORT=$(grep -oP '"port":\s*\K[0-9]+' "$AURA_ROOT/daemon/config.json" || true)
+    DETECTED_DBIND=$(grep -oP '"address":\s*"\K[^"]+' "$AURA_ROOT/daemon/config.json" || true)
     if [ -n "$DETECTED_DPORT" ]; then
       DAEMON_PORT="$DETECTED_DPORT"
       echo -e "  - Detected Daemon Port: ${CYAN}$DAEMON_PORT${NC}"
@@ -369,8 +369,52 @@ if [ "$MODE_REPAIR" = true ]; then
   fi
 fi
 
-# 1. Ask what to install
+# 1. Directory prompt first (so we can detect existing installations)
 if [ "$MODE_REPAIR" = false ]; then
+  prompt_user "Enter installation root directory [Default: /opt/aura]: " "/opt/aura" "AURA_ROOT"
+
+  # Check for existing installation and offer options
+  if [ -d "$AURA_ROOT" ] && [ "$(ls -A "$AURA_ROOT" 2>/dev/null)" ]; then
+    echo -e "\n${YELLOW}${BOLD}⚠ Existing Aura installation detected at $AURA_ROOT${NC}"
+    
+    HAS_PANEL=false
+    HAS_DAEMON=false
+    [ -d "$AURA_ROOT/panel" ] || [ -f /etc/systemd/system/aura-panel.service ] && HAS_PANEL=true
+    [ -d "$AURA_ROOT/daemon" ] || [ -f /etc/systemd/system/aura-daemon.service ] && HAS_DAEMON=true
+    
+    echo -e "${CYAN}Detected components:${NC}"
+    [ "$HAS_PANEL" = true ] && echo -e "  - Aura Panel"
+    [ "$HAS_DAEMON" = true ] && echo -e "  - Aura Daemon"
+    
+    echo ""
+    echo -e "${BOLD}What would you like to do?${NC}"
+    echo "  1) Use --fix flag to repair/update the existing installation (recommended)"
+    echo "  2) Continue with fresh install (will overwrite configuration)"
+    echo "  3) Cancel and exit"
+    
+    prompt_user "Enter choice (1-3): " "1" "EXISTING_CHOICE"
+    
+    case "$EXISTING_CHOICE" in
+      1)
+        echo -e "\n${BLUE}Run the following to repair your installation:${NC}"
+        echo -e "  ${CYAN}sudo bash aura-install.sh --fix${NC}\n"
+        exit 0
+        ;;
+      3)
+        echo -e "${YELLOW}Installation cancelled.${NC}"
+        exit 0
+        ;;
+      2)
+        echo -e "${YELLOW}Proceeding with fresh install (existing configuration will be overwritten).${NC}"
+        ;;
+      *)
+        echo -e "${RED}Invalid choice. Exiting.${NC}"
+        exit 1
+        ;;
+    esac
+  fi
+
+  # 2. Ask what to install
   if [ "$MODE_DAEMON_ONLY" = true ]; then
     INSTALL_MODE=3
     echo -e "${CYAN}Daemon-only mode selected via flag.${NC}"
@@ -381,9 +425,6 @@ if [ "$MODE_REPAIR" = false ]; then
     echo "  3) Daemon Only (Runner Agent Node)"
     prompt_user "Enter choice (1-3) [Default: 1]: " "1" "INSTALL_MODE"
   fi
-
-  # 2. Directory prompt
-  prompt_user "Enter installation root directory [Default: /opt/aura]: " "/opt/aura" "AURA_ROOT"
 
   # 3. Ports prompts
   if [ "$INSTALL_MODE" -eq 1 ] || [ "$INSTALL_MODE" -eq 2 ]; then
@@ -641,18 +682,13 @@ if [ "$INSTALL_MODE" -eq 1 ] || [ "$INSTALL_MODE" -eq 3 ]; then
   sleep 1.5
   DAEMON_KEY=$(grep -oP '"key":\s*"\K[^"]+' "$AURA_ROOT/daemon/config.json" || true)
   if [ -z "$DAEMON_KEY" ] || [ "$DAEMON_KEY" = "undefined" ]; then
-    if [ -f "$AURA_ROOT/daemon/config.json" ]; then
-      NODE_OUT=$(node -e "const k = require('$AURA_ROOT/daemon/config.json').key; if (k) console.log(k);" 2>/dev/null || true)
-      if [ -n "$NODE_OUT" ]; then
-        DAEMON_KEY="$NODE_OUT"
-      fi
-    fi
+    echo -e "${YELLOW}Note: Daemon key will be generated on first service start.${NC}"
   fi
   
   if [ -n "$DAEMON_KEY" ] && [ "$DAEMON_KEY" != "undefined" ]; then
     echo -e "  - Secure Daemon Key: ${GREEN}${DAEMON_KEY}${NC}"
   else
-    echo -e "  - Secure Daemon Key: (Start daemon service to generate first key)"
+    echo -e "  - Secure Daemon Key: (will be generated on first daemon startup)"
   fi
 fi
 
