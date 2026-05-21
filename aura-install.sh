@@ -70,33 +70,71 @@ fi
 echo -e "\n${BLUE}* Verifying system dependencies...${NC}"
 
 # 4. Dependency Installation
-install_node() {
-  echo -e "${YELLOW}Installing/Upgrading Node.js (Target: LTS / v20)...${NC}"
-  if [ -f /etc/debian_version ]; then
-    apt-get update -y
-    apt-get install -y curl git unzip build-essential
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-    apt-get install -y nodejs
-  elif [ -f /etc/redhat-release ] || [ -f /etc/system-release ]; then
-    yum install -y curl git unzip gcc-c++ make
-    curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-    yum install -y nodejs
-  else
-    echo -e "${RED}Unsupported OS type. Please install Node.js >= 18, git, and unzip manually.${NC}"
+install_node_with_nvm() {
+  echo -e "${YELLOW}Installing isolated Node.js/npm using NVM (Node Version Manager) in /opt/nvm...${NC}"
+  export NVM_DIR="/opt/nvm"
+  mkdir -p "$NVM_DIR"
+  
+  # Ensure curl is installed to pull NVM
+  if ! command -v curl &> /dev/null; then
+    if [ -f /etc/debian_version ]; then
+      apt-get update -y && apt-get install -y curl build-essential
+    else
+      yum install -y curl gcc-c++ make
+    fi
+  fi
+  
+  # Run NVM installer targeting /opt/nvm
+  curl -sL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
+  
+  # Source NVM to load it in this session
+  [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+  
+  if ! command -v nvm &> /dev/null; then
+    echo -e "${RED}Error: NVM installation failed.${NC}"
     exit 1
   fi
+  
+  echo -e "${BLUE}* Installing Node.js LTS v20...${NC}"
+  nvm install 20
+  nvm use 20
+  
+  # Expose node and npm globally to /usr/local/bin so any user can access them
+  local node_bin=$(which node)
+  ln -sf "$node_bin" /usr/local/bin/node
+  
+  local npm_bin="$NVM_DIR/versions/node/$(nvm current)/bin/npm"
+  if [ -f "$npm_bin" ]; then
+    ln -sf "$npm_bin" /usr/local/bin/npm
+  else
+    ln -sf "$(which npm)" /usr/local/bin/npm
+  fi
+  
+  # Set execute permissions on NVM tree so unprivileged users like 'aura' can run Node
+  chmod -R +rX "$NVM_DIR"
+  
+  echo -e "${GREEN}✔ Node.js $(node -v) and npm $(npm -v) successfully set up via NVM.${NC}"
 }
 
-# Verify Node.js
-if ! command -v node &> /dev/null; then
-  install_node
+# Verify Node.js and npm availability for root
+export NVM_DIR="/opt/nvm"
+if [ -s "$NVM_DIR/nvm.sh" ]; then
+  \. "$NVM_DIR/nvm.sh"
+fi
+
+if ! command -v node &> /dev/null || ! command -v npm &> /dev/null; then
+  install_node_with_nvm
 else
-  NODE_VER=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
+  NODE_VER=$(node -v | cut -d'v' -f2 | cut -d'.' -f1 || echo 0)
   if [ "$NODE_VER" -lt 18 ]; then
-    echo -e "${YELLOW}Detected outdated Node.js ($NODE_VER). Upgrading...${NC}"
-    install_node
+    echo -e "${YELLOW}Detected outdated Node.js ($NODE_VER). Upgrading with NVM...${NC}"
+    install_node_with_nvm
   else
     echo -e "${GREEN}✔ Node.js $(node -v) is already installed.${NC}"
+    # Ensure a global symlink exists for npm if it works but lacks global path bindings
+    if ! command -v npm &> /dev/null; then
+      install_node_with_nvm
+    fi
   fi
 fi
 
