@@ -644,6 +644,229 @@ function handleHealthchecks() {
   console.log(`\nHealthcheck Summary: ${C.bright}${criticalCount} Criticals${C.reset}, ${C.bright}${warningCount} Warnings${C.reset}.\n`);
 }
 
+// 7. aura selfupdate
+function handleSelfUpdate() {
+  console.log(`${C.bright}${C.blue}=== Aura CLI Self-Update ===${C.reset}\n`);
+
+  if (process.getuid && process.getuid() !== 0) {
+    console.error(`${C.red}Error: Self-update requires root privileges. Run with sudo.${C.reset}`);
+    process.exit(1);
+  }
+
+  const REPO_URL = 'https://github.com/4ngel2769/aura-panel.git';
+  const TEMP_DIR = '/tmp/aura-update-repo';
+
+  try {
+    // Clone fresh copy
+    console.log(`${C.blue}* Cloning latest release from GitHub...${C.reset}`);
+    runCmd(`rm -rf ${TEMP_DIR}`);
+    const cloneOut = runCmd(`git clone --depth 1 ${REPO_URL} ${TEMP_DIR} 2>&1`);
+    if (!fs.existsSync(path.join(TEMP_DIR, 'aura-cli.js'))) {
+      console.error(`${C.red}Error: Clone failed or aura-cli.js not found in repository.${C.reset}`);
+      if (cloneOut) console.error(`${C.gray}${cloneOut}${C.reset}`);
+      process.exit(1);
+    }
+    console.log(`${C.green}✔ Repository cloned.${C.reset}`);
+
+    // Replace CLI file
+    const targetPath = path.join(AURA_ROOT, 'aura-cli.js');
+    console.log(`${C.blue}* Replacing ${targetPath}...${C.reset}`);
+    execSync(`cp ${TEMP_DIR}/aura-cli.js ${targetPath}`, { stdio: 'pipe' });
+    execSync(`chmod +x ${targetPath}`, { stdio: 'pipe' });
+
+    // Ensure symlink
+    execSync(`ln -sf ${targetPath} /usr/local/bin/aura`, { stdio: 'pipe' });
+
+    // Cleanup
+    runCmd(`rm -rf ${TEMP_DIR}`);
+
+    console.log(`${C.green}${C.bright}\n✔ Aura CLI updated successfully!${C.reset}`);
+    console.log(`${C.gray}Run 'aura --help' to verify.${C.reset}\n`);
+  } catch (e) {
+    console.error(`${C.red}Self-update failed: ${e.message}${C.reset}`);
+    runCmd(`rm -rf ${TEMP_DIR}`);
+    process.exit(1);
+  }
+}
+
+// 8. aura update <component>
+async function handleUpdate(component) {
+  if (!component || !['panel', 'daemon', 'all'].includes(component)) {
+    console.error(`${C.red}Usage: aura update <panel|daemon|all>${C.reset}`);
+    console.error(`${C.gray}  aura update panel   - Update the web panel code${C.reset}`);
+    console.error(`${C.gray}  aura update daemon  - Update the daemon agent code${C.reset}`);
+    console.error(`${C.gray}  aura update all     - Update panel, daemon, and CLI${C.reset}`);
+    return;
+  }
+
+  if (process.getuid && process.getuid() !== 0) {
+    console.error(`${C.red}Error: Update requires root privileges. Run with sudo.${C.reset}`);
+    process.exit(1);
+  }
+
+  console.log(`${C.bright}${C.blue}=== Aura Update: ${component.toUpperCase()} ===${C.reset}\n`);
+
+  const REPO_URL = 'https://github.com/4ngel2769/aura-panel.git';
+  const TEMP_DIR = '/tmp/aura-update-repo';
+
+  try {
+    // Step 1: Clone repo
+    console.log(`${C.blue}* Cloning latest release from GitHub...${C.reset}`);
+    runCmd(`rm -rf ${TEMP_DIR}`);
+    const cloneOut = runCmd(`git clone --depth 1 ${REPO_URL} ${TEMP_DIR} 2>&1`);
+    if (!fs.existsSync(TEMP_DIR)) {
+      console.error(`${C.red}Error: Clone failed.${C.reset}`);
+      if (cloneOut) console.error(`${C.gray}${cloneOut}${C.reset}`);
+      process.exit(1);
+    }
+    console.log(`${C.green}✔ Repository cloned.${C.reset}\n`);
+
+    const doPanel = component === 'panel' || component === 'all';
+    const doDaemon = component === 'daemon' || component === 'all';
+    const doCli = component === 'all';
+
+    // --- UPDATE PANEL ---
+    if (doPanel) {
+      console.log(`${C.bright}${C.cyan}--- Updating Panel ---${C.reset}`);
+      const panelDir = path.join(AURA_ROOT, 'panel');
+
+      // Preserve critical data
+      const panelDb = path.join(panelDir, 'data', 'db.json');
+      const panelDbBackup = '/tmp/aura-panel-db-preserve.json';
+      let hadPanelDb = false;
+      if (fs.existsSync(panelDb)) {
+        execSync(`cp ${panelDb} ${panelDbBackup}`, { stdio: 'pipe' });
+        hadPanelDb = true;
+        console.log(`${C.green}  ✔ Panel database preserved.${C.reset}`);
+      }
+
+      // Stop service
+      console.log(`${C.blue}  * Stopping aura-panel service...${C.reset}`);
+      runCmd('systemctl stop aura-panel');
+      console.log(`${C.green}  ✔ Service stopped.${C.reset}`);
+
+      // Remove old code, replace with new
+      console.log(`${C.blue}  * Replacing panel files...${C.reset}`);
+      runCmd(`rm -rf ${panelDir}`);
+      execSync(`mkdir -p ${panelDir}`, { stdio: 'pipe' });
+      execSync(`cp -R ${TEMP_DIR}/panel/* ${panelDir}/`, { stdio: 'pipe' });
+
+      // Build frontend
+      console.log(`${C.blue}  * Building React frontend...${C.reset}`);
+      execSync(`cd ${TEMP_DIR}/frontend && npm install && npm run build`, { stdio: 'pipe', timeout: 120000 });
+      execSync(`mkdir -p ${panelDir}/public`, { stdio: 'pipe' });
+      execSync(`cp -R ${TEMP_DIR}/frontend/dist/* ${panelDir}/public/`, { stdio: 'pipe' });
+
+      // Install deps
+      console.log(`${C.blue}  * Installing panel dependencies...${C.reset}`);
+      execSync(`cd ${panelDir} && npm install --omit=dev`, { stdio: 'pipe', timeout: 60000 });
+
+      // Restore data
+      if (hadPanelDb) {
+        execSync(`mkdir -p ${panelDir}/data`, { stdio: 'pipe' });
+        execSync(`cp ${panelDbBackup} ${panelDb}`, { stdio: 'pipe' });
+        runCmd(`rm -f ${panelDbBackup}`);
+        console.log(`${C.green}  ✔ Panel database restored.${C.reset}`);
+      }
+
+      // Fix permissions
+      runCmd(`chown -R aura:aura ${panelDir}`);
+
+      // Restart service
+      console.log(`${C.blue}  * Restarting aura-panel service...${C.reset}`);
+      runCmd('systemctl start aura-panel');
+      console.log(`${C.green}  ✔ Panel updated and restarted!${C.reset}\n`);
+    }
+
+    // --- UPDATE DAEMON ---
+    if (doDaemon) {
+      console.log(`${C.bright}${C.cyan}--- Updating Daemon ---${C.reset}`);
+      const daemonDir = path.join(AURA_ROOT, 'daemon');
+
+      // Preserve critical data: config.json (contains key), data/db.json
+      const daemonCfg = path.join(daemonDir, 'config.json');
+      const daemonDb = path.join(daemonDir, 'data', 'db.json');
+      const cfgBackup = '/tmp/aura-daemon-cfg-preserve.json';
+      const dbBackup = '/tmp/aura-daemon-db-preserve.json';
+      let hadCfg = false, hadDb = false;
+
+      if (fs.existsSync(daemonCfg)) {
+        execSync(`cp ${daemonCfg} ${cfgBackup}`, { stdio: 'pipe' });
+        hadCfg = true;
+        console.log(`${C.green}  ✔ Daemon config (key) preserved.${C.reset}`);
+      }
+      if (fs.existsSync(daemonDb)) {
+        execSync(`cp ${daemonDb} ${dbBackup}`, { stdio: 'pipe' });
+        hadDb = true;
+        console.log(`${C.green}  ✔ Daemon database preserved.${C.reset}`);
+      }
+
+      // Stop service
+      console.log(`${C.blue}  * Stopping aura-daemon service...${C.reset}`);
+      runCmd('systemctl stop aura-daemon');
+      console.log(`${C.green}  ✔ Service stopped.${C.reset}`);
+
+      // Remove old code, replace with new
+      console.log(`${C.blue}  * Replacing daemon files...${C.reset}`);
+      runCmd(`rm -rf ${daemonDir}`);
+      execSync(`mkdir -p ${daemonDir}`, { stdio: 'pipe' });
+      execSync(`cp -R ${TEMP_DIR}/daemon/* ${daemonDir}/`, { stdio: 'pipe' });
+
+      // Install deps
+      console.log(`${C.blue}  * Installing daemon dependencies...${C.reset}`);
+      execSync(`cd ${daemonDir} && npm install --omit=dev`, { stdio: 'pipe', timeout: 60000 });
+
+      // Restore data
+      if (hadCfg) {
+        execSync(`cp ${cfgBackup} ${daemonCfg}`, { stdio: 'pipe' });
+        runCmd(`rm -f ${cfgBackup}`);
+        console.log(`${C.green}  ✔ Daemon config restored (key intact).${C.reset}`);
+      }
+      if (hadDb) {
+        execSync(`mkdir -p ${daemonDir}/data`, { stdio: 'pipe' });
+        execSync(`cp ${dbBackup} ${daemonDb}`, { stdio: 'pipe' });
+        runCmd(`rm -f ${dbBackup}`);
+        console.log(`${C.green}  ✔ Daemon database restored.${C.reset}`);
+      }
+
+      // Fix permissions
+      runCmd(`chown -R root:root ${daemonDir}`);
+      runCmd('chown -R aura:aura /home/aura/servers');
+
+      // Restart service
+      console.log(`${C.blue}  * Restarting aura-daemon service...${C.reset}`);
+      runCmd('systemctl start aura-daemon');
+      console.log(`${C.green}  ✔ Daemon updated and restarted!${C.reset}\n`);
+    }
+
+    // --- UPDATE CLI ---
+    if (doCli) {
+      console.log(`${C.bright}${C.cyan}--- Updating CLI ---${C.reset}`);
+      const targetPath = path.join(AURA_ROOT, 'aura-cli.js');
+      execSync(`cp ${TEMP_DIR}/aura-cli.js ${targetPath}`, { stdio: 'pipe' });
+      execSync(`chmod +x ${targetPath}`, { stdio: 'pipe' });
+      execSync(`ln -sf ${targetPath} /usr/local/bin/aura`, { stdio: 'pipe' });
+      console.log(`${C.green}  ✔ CLI updated.${C.reset}\n`);
+    }
+
+    // Cleanup
+    runCmd(`rm -rf ${TEMP_DIR}`);
+
+    console.log(`${C.green}${C.bright}==========================================================${C.reset}`);
+    console.log(`${C.green}${C.bright}    Aura Update Completed Successfully!${C.reset}`);
+    console.log(`${C.green}${C.bright}==========================================================${C.reset}`);
+    console.log(`${C.gray}All critical data (databases, daemon keys, server files) preserved.${C.reset}\n`);
+
+  } catch (e) {
+    console.error(`\n${C.red}Update failed: ${e.message}${C.reset}`);
+    console.error(`${C.yellow}Attempting to restart services...${C.reset}`);
+    runCmd('systemctl start aura-panel');
+    runCmd('systemctl start aura-daemon');
+    runCmd(`rm -rf ${TEMP_DIR}`);
+    process.exit(1);
+  }
+}
+
 // ----------------------------------------------------
 // MAIN ROUTING
 // ----------------------------------------------------
@@ -698,6 +921,14 @@ async function main() {
       handleHealthchecks();
       break;
 
+    case 'selfupdate':
+      handleSelfUpdate();
+      break;
+
+    case 'update':
+      await handleUpdate(args[1]?.toLowerCase());
+      break;
+
     default:
       console.error(`${C.red}Unknown command "${primary}".${C.reset}`);
       showHelp();
@@ -716,6 +947,12 @@ ${C.bright}Usage:${C.reset}
   aura instance <id> stop           Safely stop a specific Minecraft server instance
   aura instance <id> console        Open interactive terminal console to a server instance
   aura healthchecks                 Validate local environment requirements, JRE, Docker, and ports
+
+${C.bright}Update & Maintenance:${C.reset}
+  aura selfupdate                   Update the Aura CLI tool itself from GitHub
+  aura update panel                 Update the web panel (preserves database)
+  aura update daemon                Update the daemon agent (preserves config & key)
+  aura update all                   Update panel, daemon, and CLI together
 `);
 }
 

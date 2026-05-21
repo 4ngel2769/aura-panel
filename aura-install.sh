@@ -27,6 +27,7 @@ NC='\e[0m' # No Color
 # ==============================================================================
 MODE_REPAIR=false
 MODE_REPAIR_CLI=false
+MODE_UNINSTALL=false
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -38,12 +39,17 @@ while [[ "$#" -gt 0 ]]; do
       MODE_REPAIR_CLI=true
       shift
       ;;
+    --uninstall)
+      MODE_UNINSTALL=true
+      shift
+      ;;
     -h|--help)
       echo -e "${BOLD}${CYAN}==========================================================${NC}"
       echo -e "${BOLD}    Aura Guided Linux Installer Options${NC}"
       echo -e "${BOLD}${CYAN}==========================================================${NC}"
       echo -e "  ${YELLOW}--fix, --repair${NC}       Repair/refresh an existing installation with current configurations."
       echo -e "  ${YELLOW}--fix-cli, --repair-cli${NC}   Repair/refresh only the global 'aura' CLI administration helper."
+      echo -e "  ${YELLOW}--uninstall${NC}           Safely remove Aura Panel, Daemon, and service configurations."
       echo -e "  ${YELLOW}-h, --help${NC}            Show this help information."
       echo -e "${BOLD}${CYAN}==========================================================${NC}"
       exit 0
@@ -147,6 +153,154 @@ if [ "$MODE_REPAIR_CLI" = true ]; then
   echo -e "  - Global 'aura' command linked to /usr/local/bin/aura"
   echo -e "  - Corrected file located at $AURA_ROOT/aura-cli.js"
   echo "=========================================================="
+  exit 0
+fi
+
+# ==============================================================================
+# Uninstall Mode
+# ==============================================================================
+if [ "$MODE_UNINSTALL" = true ]; then
+  echo -e "\n${BOLD}${RED}==========================================================${NC}"
+  echo -e "${BOLD}    Aura Platform Uninstaller${NC}"
+  echo -e "${BOLD}${RED}==========================================================${NC}\n"
+
+  # Auto-detect AURA_ROOT from symlink if not already set
+  if [ -z "$AURA_ROOT" ]; then
+    if [ -L "/usr/local/bin/aura" ]; then
+      AURA_LINK_TARGET=$(readlink -f /usr/local/bin/aura)
+      AURA_ROOT=$(dirname "$AURA_LINK_TARGET")
+    fi
+  fi
+
+  if [ -z "$AURA_ROOT" ] || [ ! -d "$AURA_ROOT" ]; then
+    AURA_ROOT="/opt/aura"
+  fi
+
+  echo -e "${BLUE}Detected installation root: ${CYAN}$AURA_ROOT${NC}"
+  echo ""
+
+  # Detect what's installed
+  HAS_PANEL=false
+  HAS_DAEMON=false
+  [ -d "$AURA_ROOT/panel" ] || [ -f /etc/systemd/system/aura-panel.service ] && HAS_PANEL=true
+  [ -d "$AURA_ROOT/daemon" ] || [ -f /etc/systemd/system/aura-daemon.service ] && HAS_DAEMON=true
+
+  echo -e "${BOLD}Detected components:${NC}"
+  [ "$HAS_PANEL" = true ] && echo -e "  - ${CYAN}Aura Panel${NC}"
+  [ "$HAS_DAEMON" = true ] && echo -e "  - ${CYAN}Aura Daemon${NC}"
+  [ -L "/usr/local/bin/aura" ] && echo -e "  - ${CYAN}Aura CLI (/usr/local/bin/aura)${NC}"
+  echo ""
+
+  # Confirmation
+  echo -e "${YELLOW}${BOLD}WARNING: This will stop all Aura services and remove code files.${NC}"
+  echo -e "${YELLOW}Database files, daemon keys, and server data will be preserved by default.${NC}"
+  prompt_user "Are you sure you want to uninstall? (yes/no) [Default: no]: " "no" "CONFIRM_UNINSTALL"
+
+  if [ "$CONFIRM_UNINSTALL" != "yes" ] && [ "$CONFIRM_UNINSTALL" != "y" ]; then
+    echo -e "${GREEN}Uninstallation cancelled.${NC}"
+    exit 0
+  fi
+
+  echo ""
+
+  # Step 1: Stop and disable systemd services
+  if command -v systemctl &> /dev/null; then
+    if [ "$HAS_PANEL" = true ] && [ -f /etc/systemd/system/aura-panel.service ]; then
+      echo -e "${BLUE}* Stopping aura-panel service...${NC}"
+      systemctl stop aura-panel 2>/dev/null || true
+      systemctl disable aura-panel 2>/dev/null || true
+      rm -f /etc/systemd/system/aura-panel.service
+      echo -e "${GREEN}✔ aura-panel service stopped and removed.${NC}"
+    fi
+
+    if [ "$HAS_DAEMON" = true ] && [ -f /etc/systemd/system/aura-daemon.service ]; then
+      echo -e "${BLUE}* Stopping aura-daemon service...${NC}"
+      systemctl stop aura-daemon 2>/dev/null || true
+      systemctl disable aura-daemon 2>/dev/null || true
+      rm -f /etc/systemd/system/aura-daemon.service
+      echo -e "${GREEN}✔ aura-daemon service stopped and removed.${NC}"
+    fi
+
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+
+  # Step 2: Remove code files, preserve data
+  if [ "$HAS_PANEL" = true ] && [ -d "$AURA_ROOT/panel" ]; then
+    echo -e "${BLUE}* Removing Panel code files (preserving database)...${NC}"
+    # Preserve panel database
+    PANEL_DB="$AURA_ROOT/panel/data/db.json"
+    PANEL_DB_BACKUP=""
+    if [ -f "$PANEL_DB" ]; then
+      PANEL_DB_BACKUP="/tmp/aura-panel-db-backup.json"
+      cp "$PANEL_DB" "$PANEL_DB_BACKUP"
+      echo -e "  ${GREEN}✔ Panel database backed up to $PANEL_DB_BACKUP${NC}"
+    fi
+    rm -rf "$AURA_ROOT/panel"
+    echo -e "${GREEN}✔ Panel code removed.${NC}"
+  fi
+
+  if [ "$HAS_DAEMON" = true ] && [ -d "$AURA_ROOT/daemon" ]; then
+    echo -e "${BLUE}* Removing Daemon code files (preserving config & key)...${NC}"
+    # Preserve daemon config (contains the key)
+    DAEMON_CFG="$AURA_ROOT/daemon/config.json"
+    DAEMON_DB="$AURA_ROOT/daemon/data/db.json"
+    DAEMON_CFG_BACKUP=""
+    DAEMON_DB_BACKUP=""
+    if [ -f "$DAEMON_CFG" ]; then
+      DAEMON_CFG_BACKUP="/tmp/aura-daemon-config-backup.json"
+      cp "$DAEMON_CFG" "$DAEMON_CFG_BACKUP"
+      echo -e "  ${GREEN}✔ Daemon config (with key) backed up to $DAEMON_CFG_BACKUP${NC}"
+    fi
+    if [ -f "$DAEMON_DB" ]; then
+      DAEMON_DB_BACKUP="/tmp/aura-daemon-db-backup.json"
+      cp "$DAEMON_DB" "$DAEMON_DB_BACKUP"
+      echo -e "  ${GREEN}✔ Daemon database backed up to $DAEMON_DB_BACKUP${NC}"
+    fi
+    rm -rf "$AURA_ROOT/daemon"
+    echo -e "${GREEN}✔ Daemon code removed.${NC}"
+  fi
+
+  # Step 3: Remove CLI
+  if [ -f "$AURA_ROOT/aura-cli.js" ]; then
+    rm -f "$AURA_ROOT/aura-cli.js"
+    echo -e "${GREEN}✔ CLI file removed from $AURA_ROOT${NC}"
+  fi
+  if [ -L "/usr/local/bin/aura" ]; then
+    rm -f /usr/local/bin/aura
+    echo -e "${GREEN}✔ Global 'aura' symlink removed.${NC}"
+  fi
+
+  echo ""
+
+  # Step 4: Ask about full data removal
+  echo -e "${YELLOW}${BOLD}Do you also want to remove ALL remaining data?${NC}"
+  echo -e "${YELLOW}This includes: database backups in $AURA_ROOT, the aura system user, and server files in /home/aura/servers.${NC}"
+  prompt_user "Remove all data? (yes/no) [Default: no]: " "no" "REMOVE_DATA"
+
+  if [ "$REMOVE_DATA" = "yes" ] || [ "$REMOVE_DATA" = "y" ]; then
+    echo -e "${RED}* Removing all Aura data...${NC}"
+    rm -rf "$AURA_ROOT"
+    rm -rf /home/aura/servers
+    # Remove system user
+    if id -u aura &>/dev/null; then
+      userdel -r aura 2>/dev/null || userdel aura 2>/dev/null || true
+      echo -e "${GREEN}✔ System user 'aura' removed.${NC}"
+    fi
+    # Clean backups from /tmp
+    rm -f /tmp/aura-panel-db-backup.json /tmp/aura-daemon-config-backup.json /tmp/aura-daemon-db-backup.json
+    echo -e "${GREEN}✔ All data removed.${NC}"
+  else
+    echo -e "${CYAN}Data preserved. Backup locations:${NC}"
+    [ -n "$PANEL_DB_BACKUP" ] && echo -e "  - Panel DB:      $PANEL_DB_BACKUP"
+    [ -n "$DAEMON_CFG_BACKUP" ] && echo -e "  - Daemon Config: $DAEMON_CFG_BACKUP"
+    [ -n "$DAEMON_DB_BACKUP" ] && echo -e "  - Daemon DB:     $DAEMON_DB_BACKUP"
+    [ -d /home/aura/servers ] && echo -e "  - Server files:  /home/aura/servers (untouched)"
+    echo -e "\n${CYAN}You can reinstall Aura and your data will be restored automatically.${NC}"
+  fi
+
+  echo -e "\n${GREEN}${BOLD}==========================================================${NC}"
+  echo -e "${GREEN}${BOLD}    Aura Platform Uninstalled Successfully.${NC}"
+  echo -e "${GREEN}${BOLD}==========================================================${NC}"
   exit 0
 fi
 
